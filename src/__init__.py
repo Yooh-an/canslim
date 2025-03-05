@@ -1,5 +1,3 @@
 """
-Growth Stock Screener package.
+Source package for the Growth Stock Screener application.
 """
-
-__version__ = "0.1.0"

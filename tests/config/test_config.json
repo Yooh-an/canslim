@@ -1,0 +1,38 @@
+{
+  "sec_api": {
+    "user_agent": "Test User (test@example.com)",
+    "rate_limit_delay": 0.01
+  },
+  "data_paths": {
+    "raw_data_dir": "tests/test_data/raw",
+    "processed_data_dir": "tests/test_data/processed",
+    "submissions_file": "tests/test_data/raw/submissions.zip",
+    "company_facts_dir": "tests/test_data/raw/company_facts",
+    "output_file": "tests/test_data/processed/results.csv"
+  },
+  "download_settings": {
+    "max_workers": 2,
+    "max_retries": 2,
+    "retry_delay": 1,
+    "max_file_age_days": 30,
+    "company_limit": 10,
+    "force_download": false
+  },
+  "screening_criteria": {
+    "quarterly_eps_growth": 0.25,
+    "annual_eps_cagr": 0.20,
+    "revenue_growth": 0.15,
+    "profit_margin": 0.10,
+    "roe": 0.15,
+    "debt_to_equity": 1.0,
+    "outperform_sp500": true,
+    "min_market_cap": 100000000
+  },
+  "optional_api_keys": {
+    "fmp_api_key": "test_api_key"
+  },
+  "logging": {
+    "level": "INFO",
+    "log_file": "tests/test_data/logs/test.log"
+  }
+}
