@@ -21,9 +21,9 @@
     "test_mode": false
   },
   "screening_criteria": {
-    "quarterly_eps_growth": 0.25,
-    "annual_eps_cagr": 0.25,
-    "revenue_growth": 0.25,
+    "quarterly_eps_growth": 0.20,
+    "annual_eps_cagr": 0.20,
+    "revenue_growth": 0.15,
     "profit_margin": 0.10,
     "roe": 0.15,
     "debt_to_equity": 1.0,

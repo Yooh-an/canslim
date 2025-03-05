@@ -94,51 +94,180 @@ def parse_data(config):
     """Parse downloaded data and calculate metrics."""
     logger.info("Parsing data and calculating metrics...")
     
-    # Parse submissions file
-    submissions_parser = SubmissionsParser(config)
-    
     try:
-        # Process submissions to create company index
-        force_reprocess = config.get("parsing_settings", {}).get("force_reprocess", False)
-        company_df = submissions_parser.process_submissions(force=force_reprocess)
+        # Create company index
+        submissions_parser = SubmissionsParser(config)
+        companies_df = submissions_parser.create_company_index()
         
-        # Log some basic stats about the data
-        logger.info(f"Processed company index with {len(company_df)} companies")
+        logger.info(f"Processed company index with {len(companies_df)} companies")
         
-        # Get top companies by market cap (for informational purposes)
-        top_companies = submissions_parser.get_top_companies_by_market_cap(company_df, n=10)
-        logger.info("Top 10 companies by market cap:")
-        for _, company in top_companies.iterrows():
-            logger.info(f"{company['ticker']} ({company['name']}): ${company['market_cap'] / 1e9:.2f}B")
-        
-        # Parse XBRL facts files
+        # Parse company facts
         facts_parser = XBRLFactsParser(config)
+        metrics_df = facts_parser.process_all()
         
-        # Process facts with an optional limit
-        company_limit = config.get("parsing_settings", {}).get("company_limit")
-        metrics_df = facts_parser.process_all(limit=company_limit, force=force_reprocess)
+        logger.info(f"Processed financial metrics for {len(metrics_df)} companies")
         
-        # Display some metrics
-        logger.info(f"Extracted financial metrics for {len(metrics_df)} companies")
+        # Save a combined list of companies with metrics to JSON
+        # Only try to merge if both DataFrames have data
+        if not companies_df.empty and not metrics_df.empty:
+            # Check if 'cik' column exists in metrics_df
+            if 'cik' in metrics_df.columns:
+                combined_df = pd.merge(companies_df, metrics_df, on='cik', how='inner')
+                logger.info(f"Combined data for {len(combined_df)} companies")
+                companies_list = combined_df.to_dict(orient='records')
+            else:
+                logger.warning("Column 'cik' not found in metrics dataframe, using company data only")
+                companies_list = companies_df.to_dict(orient='records')
+        elif not companies_df.empty:
+            logger.warning("No metrics data available, using company data only")
+            companies_list = companies_df.to_dict(orient='records')
+        elif not metrics_df.empty:
+            logger.warning("No company index data available, using metrics data only")
+            companies_list = metrics_df.to_dict(orient='records')
+        else:
+            logger.warning("No data available in either company index or metrics")
+            companies_list = []
         
-        # Show companies with highest quarterly EPS growth (for info purposes)
-        if not metrics_df.empty and 'eps_qtr_growth' in metrics_df.columns:
-            top_growth = metrics_df.dropna(subset=['eps_qtr_growth']).sort_values('eps_qtr_growth', ascending=False).head(5)
-            if not top_growth.empty:
-                logger.info("Top 5 companies by quarterly EPS growth:")
-                for _, company in top_growth.iterrows():
-                    growth_pct = company['eps_qtr_growth'] * 100 if pd.notna(company['eps_qtr_growth']) else 0
-                    logger.info(f"{company['ticker']} ({company['name']}): {growth_pct:.1f}%")
+        # Save to JSON
+        output_dir = os.path.dirname(config.get("data_paths", {}).get("output_file", "data/processed/results.csv"))
+        os.makedirs(output_dir, exist_ok=True)
         
+        companies_list_file = os.path.join(output_dir, "companies_list.json")
+        with open(companies_list_file, 'w') as f:
+            json.dump(companies_list, f, indent=2)
+        
+        logger.info(f"Saved combined data for {len(companies_list)} companies to {companies_list_file}")
+        
+        return True
     except Exception as e:
         logger.error(f"Error during data parsing: {e}")
-        sys.exit(1)
+        import traceback
+        traceback.print_exc()  # 자세한 오류 추적 출력
+        return False
 
 def screen_stocks(config):
     """Screen stocks based on criteria."""
     logger.info("Screening stocks based on criteria...")
-    # This will be implemented in Phase 4
-    pass
+    
+    try:
+        # 처리된 회사 데이터 로드
+        processed_dir = config.get("data_paths", {}).get("processed_data_dir", "data/processed")
+        companies_list_file = os.path.join(processed_dir, "companies_list.json")
+        
+        if not os.path.exists(companies_list_file):
+            logger.error(f"Companies list file not found: {companies_list_file}")
+            print(f"Error: Companies list file not found at {companies_list_file}")
+            print("Please run the parse mode first to generate the required data.")
+            return
+        
+        with open(companies_list_file, 'r') as f:
+            companies = json.load(f)
+        
+        logger.info(f"Loaded data for {len(companies)} companies")
+        print(f"Loaded data for {len(companies)} companies")
+        
+        # 스크리닝 조건 가져오기
+        criteria = config.get("screening_criteria", {})
+        
+        # 스크리닝 기준 출력
+        print("\nScreening Criteria:")
+        print(f"- Quarterly EPS Growth: ≥ {criteria.get('quarterly_eps_growth', 0.20) * 100:.1f}%")
+        print(f"- Annual EPS Growth (CAGR): ≥ {criteria.get('annual_eps_cagr', 0.20) * 100:.1f}%")
+        print(f"- Revenue Growth: ≥ {criteria.get('revenue_growth', 0.15) * 100:.1f}%")
+        print(f"- Profit Margin: ≥ {criteria.get('profit_margin', 0.10) * 100:.1f}%")
+        print(f"- Return on Equity: ≥ {criteria.get('roe', 0.15) * 100:.1f}%")
+        print(f"- Debt to Equity: ≤ {criteria.get('debt_to_equity', 1.0)}")
+        print(f"- Minimum Market Cap: ${criteria.get('min_market_cap', 200000000) / 1000000:.1f}M")
+        if criteria.get('outperform_sp500', True):
+            print("- Must outperform S&P 500")
+        
+        # 기준에 맞는 회사 필터링
+        filtered_companies = []
+        for company in companies:
+            # 필수 필드가 있는지 확인
+            if not all(key in company for key in ['ticker', 'name']):
+                continue
+                
+            # 각 기준에 대해 개별적으로 검사 (누락된 데이터 처리)
+            eps_growth_ok = company.get("quarterly_eps_growth", 0) >= criteria.get("quarterly_eps_growth", 0.2)
+            eps_cagr_ok = company.get("annual_eps_cagr", 0) >= criteria.get("annual_eps_cagr", 0.2)
+            revenue_ok = company.get("revenue_growth", 0) >= criteria.get("revenue_growth", 0.15)
+            margin_ok = company.get("profit_margin", 0) >= criteria.get("profit_margin", 0.1)
+            roe_ok = company.get("roe", 0) >= criteria.get("roe", 0.15)
+            
+            # 부채비율은 낮을수록 좋음
+            debt_ok = company.get("debt_to_equity", float('inf')) <= criteria.get("debt_to_equity", 1.0)
+            
+            # 시가총액은 최소값 이상이어야 함
+            mktcap_ok = company.get("market_cap", 0) >= criteria.get("min_market_cap", 200000000)
+            
+            # S&P 500 대비 성과 검사 (선택적)
+            sp500_ok = True
+            if criteria.get("outperform_sp500", True) and "price_performance" in company:
+                sp500_ok = company.get("price_performance", {}).get("vs_sp500", 0) > 0
+            
+            # 모든 조건을 만족하면 필터링된 회사 목록에 추가
+            if eps_growth_ok and eps_cagr_ok and revenue_ok and margin_ok and roe_ok and debt_ok and mktcap_ok and sp500_ok:
+                filtered_companies.append(company)
+        
+        logger.info(f"Found {len(filtered_companies)} companies passing screening criteria")
+        print(f"\nFound {len(filtered_companies)} companies passing screening criteria")
+        
+        # 결과 저장
+        output_file = config.get("data_paths", {}).get("output_file", "data/processed/results.csv")
+        
+        if filtered_companies:
+            # 결과를 시장 성과 대비 성장률로 정렬
+            filtered_companies.sort(key=lambda x: (
+                x.get("quarterly_eps_growth", 0) + 
+                x.get("annual_eps_cagr", 0) + 
+                x.get("revenue_growth", 0)
+            ), reverse=True)
+            
+            # DataFrame으로 변환하여 CSV로 저장
+            df = pd.DataFrame(filtered_companies)
+            df.to_csv(output_file, index=False)
+            logger.info(f"Results saved to {output_file}")
+            print(f"Results saved to {output_file}")
+            
+            # 결과 출력 - 상위 10개 회사만
+            print("\nTop companies passing screening criteria:")
+            print(f"{'TICKER':<6} {'NAME':<30} {'Q EPS':<8} {'A EPS':<8} {'REV':<8} {'MARGIN':<8} {'ROE':<8} {'D/E':<8} {'MKTCAP($M)':<12}")
+            print("-" * 100)
+            
+            for company in filtered_companies[:10]:
+                ticker = company.get('ticker', 'N/A')
+                name = company.get('name', 'Unknown')
+                if len(name) > 28:
+                    name = name[:25] + '...'
+                
+                q_eps = f"{company.get('quarterly_eps_growth', 0) * 100:.1f}%"
+                a_eps = f"{company.get('annual_eps_cagr', 0) * 100:.1f}%"
+                rev = f"{company.get('revenue_growth', 0) * 100:.1f}%"
+                margin = f"{company.get('profit_margin', 0) * 100:.1f}%"
+                roe = f"{company.get('roe', 0) * 100:.1f}%"
+                de = f"{company.get('debt_to_equity', 0):.2f}"
+                mktcap = f"${company.get('market_cap', 0) / 1000000:.1f}M"
+                
+                print(f"{ticker:<6} {name:<30} {q_eps:<8} {a_eps:<8} {rev:<8} {margin:<8} {roe:<8} {de:<8} {mktcap:<12}")
+                
+            # 전체 결과 수가 10개 이상인 경우 추가 결과가 있음을 알려줌
+            if len(filtered_companies) > 10:
+                print(f"\n...and {len(filtered_companies) - 10} more companies. See {output_file} for the complete list.")
+        else:
+            logger.warning("No companies passed the screening criteria")
+            print("\nNo companies passed the screening criteria. Consider relaxing your criteria in config.json.")
+            
+            # 빈 결과 파일 생성
+            with open(output_file, 'w') as f:
+                f.write("No companies passed the screening criteria.\n")
+            print(f"Empty results file created at {output_file}")
+    
+    except Exception as e:
+        logger.error(f"Error during stock screening: {e}")
+        print(f"Error during stock screening: {e}")
+        import traceback
+        traceback.print_exc()
 
 def main():
     """Main entry point for the application."""
