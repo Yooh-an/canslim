@@ -99,6 +99,17 @@ growth-stock-screener/
 2. Submit Pull Requests: Improve code or implement new features
 3. Improve Documentation: README, comments, technical docs
 
+## References
+
+- [SEC EDGAR API Documentation](https://www.sec.gov/edgar/sec-api-documentation)
+- [CAN SLIM Investment Strategy](https://www.investors.com/ibd-university/can-slim/)
+- [Mark Minervini's Trend Template](https://www.minervini.com/blog/index.php/trend-template/)
+
+## Important Notes
+
+- The SEC EDGAR API applies rate limits to excessive requests. This application implements appropriate rate limiting.
+- Do not base investment decisions solely on the results of this tool; always conduct additional research and seek professional advice.
+
 ## License
 
-This project is licensed under the MIT License. See the LICENSE file for details.
+This project is distributed under the MIT License. See the LICENSE file for more information.
