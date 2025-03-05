@@ -13,13 +13,13 @@ import logging
 import pandas as pd
 from pathlib import Path
 
-from utils.logger import setup_logger
-from utils.directory import ensure_directories
-from api.sec_client import SECClient
-from collectors.submissions_collector import SubmissionsCollector
-from collectors.facts_collector import CompanyFactsCollector
-from parsers.submissions_parser import SubmissionsParser
-from parsers.facts_parser import XBRLFactsParser
+from src.utils.logger import setup_logger
+from src.utils.directory import ensure_directories
+from src.api.sec_client import SECClient
+from src.collectors.submissions_collector import SubmissionsCollector
+from src.collectors.facts_collector import CompanyFactsCollector
+from src.parsers.submissions_parser import SubmissionsParser
+from src.parsers.facts_parser import XBRLFactsParser
 
 def load_config(config_path):
     """Load configuration from JSON file."""

@@ -15,8 +15,10 @@
     "max_retries": 3,
     "retry_delay": 5,
     "max_file_age_days": 30,
-    "company_limit": null,
-    "force_download": false
+    "company_limit": 100,
+    "force_download": false,
+    "filter_by_ticker": true,
+    "test_mode": false
   },
   "screening_criteria": {
     "quarterly_eps_growth": 0.25,
