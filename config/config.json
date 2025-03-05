@@ -1,0 +1,38 @@
+{
+  "sec_api": {
+    "user_agent": "Name (email@example.com)",
+    "rate_limit_delay": 0.1
+  },
+  "data_paths": {
+    "raw_data_dir": "data/raw",
+    "processed_data_dir": "data/processed",
+    "submissions_file": "data/raw/submissions.zip",
+    "company_facts_dir": "data/raw/company_facts",
+    "output_file": "data/processed/results.csv"
+  },
+  "download_settings": {
+    "max_workers": 4,
+    "max_retries": 3,
+    "retry_delay": 5,
+    "max_file_age_days": 30,
+    "company_limit": null,
+    "force_download": false
+  },
+  "screening_criteria": {
+    "quarterly_eps_growth": 0.25,
+    "annual_eps_cagr": 0.25,
+    "revenue_growth": 0.25,
+    "profit_margin": 0.10,
+    "roe": 0.15,
+    "debt_to_equity": 1.0,
+    "outperform_sp500": true,
+    "min_market_cap": 200000000
+  },
+  "optional_api_keys": {
+    "fmp_api_key": "6mZ1EnNvVbDjn7SSDtlMMda73VFAD5Gk"
+  },
+  "logging": {
+    "level": "INFO",
+    "log_file": "logs/screener.log"
+  }
+}
