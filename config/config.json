@@ -27,7 +27,7 @@
     "profit_margin": 0.10,
     "roe": 0.15,
     "debt_to_equity": 1.0,
-    "outperform_sp500": true,
+    "outperform_sp500": false,
     "min_market_cap": 200000000
   },
   "optional_api_keys": {
