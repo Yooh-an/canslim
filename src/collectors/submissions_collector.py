@@ -222,7 +222,7 @@ class SubmissionsCollector:
         if min_market_cap:
             filtered_companies = [
                 c for c in companies_with_tickers
-                if c.get("market_cap", 0) >= min_market_cap
+                if not c.get("market_cap") or c.get("market_cap", 0) >= min_market_cap
             ]
         else:
             filtered_companies = companies_with_tickers

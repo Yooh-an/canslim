@@ -190,5 +190,37 @@ class TestSubmissionsCollector(unittest.TestCase):
         companies = self.collector.get_company_list(min_market_cap=6000000000)
         self.assertEqual(len(companies), 1)  # Only the first company should remain
 
+    def test_get_company_list_keeps_unknown_market_cap_for_later_enrichment(self):
+        """Unknown market caps should not be filtered before market-data enrichment."""
+        companies_data = {
+            "0001234567": {
+                "name": "Known Large Cap",
+                "tickers": ["BIG"],
+                "exchanges": ["NYSE"],
+                "marketCap": 10000000000,
+            },
+            "0001234568": {
+                "name": "Known Small Cap",
+                "tickers": ["SMALL"],
+                "exchanges": ["NASDAQ"],
+                "marketCap": 100000000,
+            },
+            "0001234569": {
+                "name": "Unknown Market Cap",
+                "tickers": ["UNK"],
+                "exchanges": ["NASDAQ"],
+                "marketCap": 0,
+            },
+        }
+
+        companies_file = os.path.join(self.collector.extracted_dir, "companies.json")
+        with open(companies_file, 'w') as f:
+            json.dump(companies_data, f)
+
+        companies = self.collector.get_company_list(min_market_cap=6000000000)
+        tickers = {company["ticker"] for company in companies}
+
+        self.assertEqual(tickers, {"BIG", "UNK"})
+
 if __name__ == '__main__':
     unittest.main()

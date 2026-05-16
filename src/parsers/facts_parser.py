@@ -197,7 +197,7 @@ class XBRLFactsParser:
 
             if record['form'] == '10-K' and (record.get('fp') == 'FY' or (days and days >= 300)):
                 current = annual_by_fy.get(fy)
-                if current is None or (record.get('filed') or '') > (current.get('filed') or ''):
+                if current is None or (record.get('end') or '', record.get('filed') or '') > (current.get('end') or '', current.get('filed') or ''):
                     annual_by_fy[fy] = record
                 continue
 
@@ -210,7 +210,7 @@ class XBRLFactsParser:
             )
             target = by_period if is_standalone_quarter else ytd_by_period
             current = target.get(key)
-            if current is None or (record.get('filed') or '', record.get('end') or '') > (current.get('filed') or '', current.get('end') or ''):
+            if current is None or (record.get('end') or '', record.get('filed') or '') > (current.get('end') or '', current.get('filed') or ''):
                 target[key] = record
 
         derived: Dict[Tuple[int, int], Dict[str, Any]] = dict(by_period)
@@ -675,76 +675,105 @@ class XBRLFactsParser:
                 for record in annual
             ]
     
+    @staticmethod
+    def _latest_instant_value(us_gaap_facts: Dict[str, Any], tags: List[str]) -> Optional[Tuple[str, float]]:
+        """Return the newest instant balance-sheet value for any of the supplied tags."""
+        values: List[Tuple[pd.Timestamp, str, float]] = []
+        for tag in tags:
+            tag_data = us_gaap_facts.get(tag)
+            if not tag_data or 'USD' not in tag_data.get('units', {}):
+                continue
+            for item in tag_data['units']['USD']:
+                if normalized_form(item) not in {'10-Q', '10-K'}:
+                    continue
+                end_date = item_end_date(item)
+                value = safe_float(item.get('val'))
+                if not end_date or value is None:
+                    continue
+                try:
+                    values.append((pd.Timestamp(end_date), item.get('filed', ''), value))
+                except Exception:
+                    continue
+
+        if not values:
+            return None
+        values.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        latest_end, _, latest_value = values[0]
+        return latest_end.date().isoformat(), latest_value
+
+    def _extract_debt_metrics(self, us_gaap_facts: Dict[str, Any], metrics: Dict[str, Any]) -> None:
+        """Extract interest-bearing debt, avoiding total liabilities as a debt proxy."""
+        debt_components = {
+            'debt_current': [
+                'LongTermDebtCurrent',
+                'CurrentPortionOfLongTermDebt',
+                'CurrentPortionOfLongTermDebtAndFinanceLeaseObligations',
+                'LongTermDebtAndFinanceLeaseObligationsCurrent',
+            ],
+            'debt_noncurrent': [
+                'LongTermDebtNoncurrent',
+                'LongTermDebtAndFinanceLeaseObligationsNoncurrent',
+                'LongTermDebtAndFinanceLeaseObligations',
+            ],
+            'short_term_debt': [
+                'ShortTermBorrowings',
+                'ShortTermDebt',
+                'ShortTermBankLoansAndNotesPayable',
+                'CommercialPaper',
+            ],
+        }
+
+        component_total = 0.0
+        found_component = False
+        for metric_name, tags in debt_components.items():
+            value = self._latest_instant_value(us_gaap_facts, tags)
+            if value is None:
+                continue
+            _, amount = value
+            metrics[metric_name] = amount
+            component_total += amount
+            found_component = True
+
+        if found_component:
+            metrics['debt'] = component_total
+            return
+
+        total_debt = self._latest_instant_value(
+            us_gaap_facts,
+            [
+                'LongTermDebt',
+                'DebtAndFinanceLeaseObligations',
+                'ShortTermBorrowingsAndLongTermDebt',
+            ],
+        )
+        if total_debt is not None:
+            _, amount = total_debt
+            metrics['debt'] = amount
+
     def _extract_balance_sheet_metrics(self, us_gaap_facts: Dict[str, Any], metrics: Dict[str, Any]) -> None:
         """Extract Balance Sheet metrics from us-gaap facts."""
-        # Extract Assets
-        if "Assets" in us_gaap_facts:
-            tag_data = us_gaap_facts["Assets"]
-            if 'USD' in tag_data.get('units', {}):
-                values = []
-                for item in tag_data['units']['USD']:
-                    if normalized_form(item) == '10-K':
-                        try:
-                            end_date = item_end_date(item)
-                            if not end_date:
-                                continue
-                            val = float(item['val'])
-                            values.append((end_date, val))
-                        except (ValueError, TypeError):
-                            pass
-                
-                # Sort by date (newest first)
-                if values:
-                    values.sort(key=lambda x: x[0], reverse=True)
-                    metrics['_asset_values'] = values
-                    metrics['assets'] = values[0][1]  # Most recent value
-        
-        # Extract Liabilities
-        if "Liabilities" in us_gaap_facts:
-            tag_data = us_gaap_facts["Liabilities"]
-            if 'USD' in tag_data.get('units', {}):
-                values = []
-                for item in tag_data['units']['USD']:
-                    if normalized_form(item) == '10-K':
-                        try:
-                            end_date = item_end_date(item)
-                            if not end_date:
-                                continue
-                            val = float(item['val'])
-                            values.append((end_date, val))
-                        except (ValueError, TypeError):
-                            pass
-                
-                # Sort by date (newest first)
-                if values:
-                    values.sort(key=lambda x: x[0], reverse=True)
-                    metrics['_liability_values'] = values
-                    metrics['liabilities'] = values[0][1]  # Most recent value
-        
-        # Extract Equity
-        equity_tags = ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"]
-        for tag in equity_tags:
-            if tag in us_gaap_facts:
-                tag_data = us_gaap_facts[tag]
-                if 'USD' in tag_data.get('units', {}):
-                    values = []
-                    for item in tag_data['units']['USD']:
-                        if normalized_form(item) == '10-K':
-                            try:
-                                end_date = item_end_date(item)
-                                if not end_date:
-                                    continue
-                                val = float(item['val'])
-                                values.append((end_date, val))
-                            except (ValueError, TypeError):
-                                pass
-                    
-                    # Sort by date (newest first)
-                    if values:
-                        values.sort(key=lambda x: x[0], reverse=True)
-                        metrics['_equity_values'] = values
-                        metrics['equity'] = values[0][1]  # Most recent value
-                        return
+        assets = self._latest_instant_value(us_gaap_facts, ["Assets"])
+        if assets is not None:
+            _, value = assets
+            metrics['assets'] = value
+
+        liabilities = self._latest_instant_value(us_gaap_facts, ["Liabilities"])
+        if liabilities is not None:
+            _, value = liabilities
+            metrics['liabilities'] = value
+
+        equity = self._latest_instant_value(
+            us_gaap_facts,
+            [
+                "StockholdersEquity",
+                "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+            ],
+        )
+        if equity is not None:
+            _, value = equity
+            metrics['equity'] = value
+
+        self._extract_debt_metrics(us_gaap_facts, metrics)
     
     def _calculate_derived_metrics(self, metrics: Dict[str, Any]) -> None:
         """Calculate derived metrics from extracted financial data."""
@@ -777,9 +806,11 @@ class XBRLFactsParser:
                 latest_income = annual_income[0][2]
                 metrics['roe'] = latest_income / metrics['equity']
         
-        # Calculate Debt-to-Equity
+        # Calculate Debt-to-Equity from interest-bearing debt, not total liabilities.
+        if 'equity' in metrics and 'debt' in metrics and metrics['equity'] > 0:
+            metrics['debt_to_equity'] = metrics['debt'] / metrics['equity']
         if 'equity' in metrics and 'liabilities' in metrics and metrics['equity'] > 0:
-            metrics['debt_to_equity'] = metrics['liabilities'] / metrics['equity']
+            metrics['liabilities_to_equity'] = metrics['liabilities'] / metrics['equity']
         
         # Remove temporary calculation values
         for key in list(metrics.keys()):

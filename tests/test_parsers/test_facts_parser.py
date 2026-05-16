@@ -102,6 +102,25 @@ class TestXBRLFactsParser(unittest.TestCase):
         self.assertEqual(values["2023Q4"], 40)
         self.assertNotIn("2025Q4", values)
 
+    def test_quarterly_flow_uses_fiscal_year_for_non_calendar_year_companies(self):
+        """Fiscal years ending in January should group Q1-Q4 under SEC fy, not calendar year."""
+        concept_data = {
+            "units": {
+                "USD": [
+                    {"form": "10-Q", "fy": 2026, "fp": "Q1", "start": "2025-01-27", "end": "2025-04-27", "filed": "2025-05-28", "val": 10},
+                    {"form": "10-Q", "fy": 2026, "fp": "Q2", "start": "2025-04-28", "end": "2025-07-27", "filed": "2025-08-27", "val": 20},
+                    {"form": "10-Q", "fy": 2026, "fp": "Q3", "start": "2025-07-28", "end": "2025-10-26", "filed": "2025-11-19", "val": 30},
+                    {"form": "10-K", "fy": 2026, "fp": "FY", "start": "2025-01-27", "end": "2026-01-25", "filed": "2026-02-25", "val": 100},
+                ]
+            }
+        }
+
+        series = self.parser._quarterly_flow_series(concept_data, ["USD"])
+        values = {item["period_key"]: item["val"] for item in series}
+
+        self.assertEqual(values["2026Q4"], 40)
+        self.assertNotIn("2025Q4", values)
+
     def test_profit_margin_uses_quarterly_income_not_ytd_income(self):
         """Profit margin should compare quarterly revenue with quarterly net income."""
         us_gaap_facts = {
@@ -173,7 +192,50 @@ class TestXBRLFactsParser(unittest.TestCase):
         self.parser._extract_revenue_metrics(us_gaap_facts, metrics)
 
         self.assertNotIn("revenue_growth", metrics)
-         
+
+    def test_debt_to_equity_uses_debt_not_total_liabilities_and_latest_quarter(self):
+        """Debt-to-equity should use debt tags and the newest 10-Q/10-K balance sheet values."""
+        us_gaap_facts = {
+            "Liabilities": {
+                "units": {
+                    "USD": [
+                        {"form": "10-Q", "fy": 2025, "fp": "Q1", "end": "2025-03-31", "filed": "2025-05-01", "val": 900},
+                    ]
+                }
+            },
+            "LongTermDebtCurrent": {
+                "units": {
+                    "USD": [
+                        {"form": "10-Q", "fy": 2025, "fp": "Q1", "end": "2025-03-31", "filed": "2025-05-01", "val": 100},
+                    ]
+                }
+            },
+            "LongTermDebtNoncurrent": {
+                "units": {
+                    "USD": [
+                        {"form": "10-Q", "fy": 2025, "fp": "Q1", "end": "2025-03-31", "filed": "2025-05-01", "val": 200},
+                    ]
+                }
+            },
+            "StockholdersEquity": {
+                "units": {
+                    "USD": [
+                        {"form": "10-K", "fy": 2024, "fp": "FY", "end": "2024-12-31", "filed": "2025-02-15", "val": 500},
+                        {"form": "10-Q", "fy": 2025, "fp": "Q1", "end": "2025-03-31", "filed": "2025-05-01", "val": 600},
+                    ]
+                }
+            },
+        }
+        metrics = {}
+
+        self.parser._extract_balance_sheet_metrics(us_gaap_facts, metrics)
+        self.parser._calculate_derived_metrics(metrics)
+
+        self.assertEqual(metrics["liabilities"], 900)
+        self.assertEqual(metrics["debt"], 300)
+        self.assertEqual(metrics["equity"], 600)
+        self.assertAlmostEqual(metrics["debt_to_equity"], 0.5)
+
 
 if __name__ == '__main__':
     unittest.main()

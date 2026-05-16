@@ -73,25 +73,36 @@ def quarter_from_end_date(end_date: Optional[str]) -> Optional[int]:
 
 def period_year(record: Dict[str, Any]) -> Optional[int]:
     """
-    Return the year represented by a fact's period.
+    Return the fiscal year represented by a fact's period.
 
-    SEC companyfacts can repeat historical facts in a newer filing, so item['fy']
-    may describe the filing context rather than the historical period. Prefer
-    frame/end-date to avoid assigning old facts to the latest fiscal year.
+    SEC companyfacts can repeat historical facts in a newer filing, so ``fy`` can
+    occasionally describe the filing context rather than the period. Prefer SEC's
+    fiscal year when it is plausible for the fact end date, but fall back to the
+    frame/end year for clearly stale restatements.
     """
-    frame_year, _ = frame_period(record.get("frame"))
-    if frame_year:
-        return frame_year
+    end_year = None
     end_date = record.get("end")
     if end_date:
         try:
-            return int(pd.Timestamp(end_date).year)
+            end_year = int(pd.Timestamp(end_date).year)
         except Exception:
-            pass
+            end_year = None
+
     try:
-        return int(record.get("fy"))
+        fy = int(record.get("fy"))
     except (ValueError, TypeError):
-        return None
+        fy = None
+
+    if fy is not None:
+        if end_year is None or abs(fy - end_year) <= 1:
+            return fy
+
+    frame_year, _ = frame_period(record.get("frame"))
+    if frame_year:
+        return frame_year
+    if end_year is not None:
+        return end_year
+    return fy
 
 
 def safe_float(value: Any) -> Optional[float]:

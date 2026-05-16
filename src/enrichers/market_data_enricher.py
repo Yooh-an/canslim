@@ -14,8 +14,11 @@ import numpy as np
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 
+from src.utils.yahoo_finance import configure_yfinance_user_agent
+
 try:
     import yfinance as yf
+    configure_yfinance_user_agent()
 except ImportError:
     yf = None
 
@@ -528,12 +531,20 @@ class MarketDataEnricher:
                 continue
 
             if downloaded.empty:
+                for ticker in chunk:
+                    history = self._download_yahoo_chart_history(ticker, period)
+                    if history is not None and not history.empty:
+                        histories[ticker] = history
+                        self._save_price_history_cache(ticker, history)
                 continue
 
             if len(chunk) == 1:
                 history = downloaded.dropna(how="all")
-                histories[chunk[0]] = history
-                self._save_price_history_cache(chunk[0], history)
+                if history.empty:
+                    history = self._download_yahoo_chart_history(chunk[0], period)
+                if history is not None and not history.empty:
+                    histories[chunk[0]] = history
+                    self._save_price_history_cache(chunk[0], history)
                 continue
 
             for ticker in chunk:
@@ -561,10 +572,50 @@ class MarketDataEnricher:
                 threads=False,
             )
             history = data.dropna(how="all") if not data.empty else None
-            if history is not None:
-                self._save_price_history_cache(ticker, history)
-            return history
         except Exception:
+            history = None
+
+        if history is None or history.empty:
+            history = self._download_yahoo_chart_history(ticker, period)
+
+        if history is not None and not history.empty:
+            self._save_price_history_cache(ticker, history)
+        return history
+
+    @staticmethod
+    def _chart_response_to_history(payload: Dict[str, Any]) -> Optional[pd.DataFrame]:
+        result = (payload.get("chart", {}).get("result") or [None])[0]
+        if not result or not result.get("timestamp"):
+            return None
+        quote = (result.get("indicators", {}).get("quote") or [None])[0]
+        if not quote:
+            return None
+        index = pd.to_datetime(result["timestamp"], unit="s")
+        history = pd.DataFrame(
+            {
+                "Open": quote.get("open"),
+                "High": quote.get("high"),
+                "Low": quote.get("low"),
+                "Close": quote.get("close"),
+                "Volume": quote.get("volume"),
+            },
+            index=index,
+        )
+        return history.dropna(how="all")
+
+    def _download_yahoo_chart_history(self, ticker: str, period: str) -> Optional[pd.DataFrame]:
+        """Fallback to Yahoo's chart endpoint when yfinance returns empty data."""
+        try:
+            response = requests.get(
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}",
+                params={"range": period, "interval": "1d", "includePrePost": "false"},
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=30,
+            )
+            response.raise_for_status()
+            return self._chart_response_to_history(response.json())
+        except Exception as e:
+            logger.debug(f"Yahoo chart fallback failed for {ticker}: {e}")
             return None
 
     def _price_cache_file(self, ticker: str) -> str:
@@ -723,7 +774,12 @@ class MarketDataEnricher:
                 recent["price_change"] = recent["close"].diff()
                 up_volume = recent.loc[recent["price_change"] > 0, "volume"].sum()
                 down_volume = recent.loc[recent["price_change"] < 0, "volume"].sum()
-                metrics["up_down_volume_ratio_50d"] = float(up_volume / down_volume) if down_volume > 0 else np.nan
+                if down_volume > 0:
+                    metrics["up_down_volume_ratio_50d"] = float(up_volume / down_volume)
+                elif up_volume > 0:
+                    metrics["up_down_volume_ratio_50d"] = float("inf")
+                else:
+                    metrics["up_down_volume_ratio_50d"] = np.nan
                 avg_50 = recent["volume"].mean()
                 metrics["volume_dry_up_ratio_10_50"] = float(price_volume["volume"].tail(10).mean() / avg_50) if avg_50 else np.nan
                 metrics["breakout_volume_ratio"] = float(price_volume["volume"].iloc[-1] / avg_50) if avg_50 else np.nan

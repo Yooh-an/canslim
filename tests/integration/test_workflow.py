@@ -319,6 +319,20 @@ class TestEndToEndWorkflow(unittest.TestCase):
                                 }
                             ]
                         }
+                    },
+                    "LongTermDebtNoncurrent": {
+                        "units": {
+                            "USD": [
+                                {
+                                    "form": "10-K",
+                                    "val": liabilities * 0.5,
+                                    "period": {
+                                        "startDate": "2022-01-01",
+                                        "endDate": "2022-12-31"
+                                    }
+                                }
+                            ]
+                        }
                     }
                 }
             }
@@ -360,8 +374,15 @@ class TestEndToEndWorkflow(unittest.TestCase):
         facts_parser = XBRLFactsParser(self.config)
         metrics_df = facts_parser.process_all(force=True)
         
-        # 3. Apply financial filters
-        stock_screener = StockScreener(self.config)
+        # 3. Apply financial filters. Price outperformance is applied in the next step.
+        financial_config = {
+            **self.config,
+            "screening_criteria": {
+                **self.config["screening_criteria"],
+                "outperform_sp500": False,
+            },
+        }
+        stock_screener = StockScreener(financial_config)
         filtered_df = stock_screener.apply_all_filters()
         
         # Check that at least some companies made it past financial filters

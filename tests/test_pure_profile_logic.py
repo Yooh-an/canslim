@@ -8,11 +8,15 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
+
+import pandas as pd
 
 from src.growth_stock_screener import (
     _check_institutional,
     _check_pattern,
     _check_supply_demand,
+    _filter_screening_candidates,
 )
 from src.enrichers.market_data_enricher import MarketDataEnricher
 from src.utils.config_loader import load_config_file
@@ -185,6 +189,141 @@ class TestPureProfileLogic(unittest.TestCase):
                     "rs_line_near_high": False,
                 },
                 criteria,
+            )
+        )
+
+    def test_summary_counts_base_and_breakout_as_distinct_signals(self):
+        company = {
+            "ticker": "SETUP",
+            "name": "Setup Corp",
+            "quarterly_eps_growth": 0.30,
+            "annual_eps_cagr": 0.30,
+            "revenue_growth": 0.25,
+            "profit_margin": 0.10,
+            "roe": 0.20,
+            "debt_to_equity": 1.0,
+            "market_cap": 1_000_000_000,
+            "rs_rating": 90,
+            "price_vs_52w_high": 0.93,
+            "avg_dollar_volume_50d": 50_000_000,
+            "market_outperformance_12m": 0.05,
+            "rs_line_near_high": True,
+            "up_down_volume_ratio_50d": 1.2,
+            "volume_trend_50_200": 1.0,
+            "near_pivot": True,
+            "valid_breakout": False,
+            "breakout_pct": -0.01,
+            "base_depth_65d": 0.20,
+        }
+
+        filtered, counts = _filter_screening_candidates(
+            [company],
+            {
+                "quarterly_eps_growth": 0.25,
+                "annual_eps_cagr": 0.25,
+                "revenue_growth": 0.20,
+                "profit_margin": 0.05,
+                "roe": 0.17,
+                "debt_to_equity": 2.0,
+                "outperform_sp500": True,
+                "min_market_cap": 300_000_000,
+            },
+            {
+                "rs_rating_min": 80,
+                "price_vs_52w_high_min": 0.85,
+                "avg_dollar_volume_min": 15_000_000,
+                "rs_line_near_high": True,
+            },
+            {
+                "require_supply_demand": True,
+                "up_down_volume_ratio_min": 1.0,
+                "volume_trend_50_200_min": 0.9,
+            },
+            {"require_institutional_sponsorship": False},
+            {
+                "require_new_high_or_breakout": True,
+                "allow_near_pivot_setup": True,
+                "price_vs_52w_high_hard_min": 0.90,
+                "breakout_pct_min": -0.02,
+                "base_depth_max": 0.35,
+            },
+            market_direction_ok=True,
+            test_mode=False,
+        )
+
+        self.assertEqual([stock["ticker"] for stock in filtered], ["SETUP"])
+        self.assertEqual(counts["new_high"], 1)
+        self.assertEqual(counts["base"], 1)
+        self.assertEqual(counts["breakout"], 0)
+
+    @patch('src.enrichers.market_data_enricher.requests.get')
+    @patch('src.enrichers.market_data_enricher.yf.download')
+    def test_price_history_download_falls_back_to_yahoo_chart_api(self, mock_download, mock_get):
+        """The live pipeline should still get prices when yfinance download returns empty data."""
+        mock_download.return_value = pd.DataFrame()
+        mock_response = Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            "chart": {
+                "result": [{
+                    "timestamp": [1640995200, 1641081600],
+                    "indicators": {"quote": [{
+                        "open": [100, 101],
+                        "high": [102, 103],
+                        "low": [99, 100],
+                        "close": [101, 102],
+                        "volume": [1000, 1200],
+                    }]},
+                }],
+                "error": None,
+            }
+        }
+        mock_get.return_value = mock_response
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            enricher = MarketDataEnricher(
+                {
+                    "data_paths": {
+                        "processed_data_dir": temp_dir,
+                        "raw_data_dir": temp_dir,
+                    }
+                }
+            )
+            histories = enricher._download_price_history(["AAPL"], "15mo", chunk_size=25)
+
+        self.assertIn("AAPL", histories)
+        self.assertEqual(histories["AAPL"]["Close"].tolist(), [101, 102])
+
+    def test_up_down_volume_ratio_treats_no_down_volume_as_strong_accumulation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            enricher = MarketDataEnricher(
+                {
+                    "data_paths": {
+                        "processed_data_dir": temp_dir,
+                        "raw_data_dir": temp_dir,
+                    },
+                    "pattern_criteria": {},
+                }
+            )
+            history = pd.DataFrame(
+                {
+                    "Close": range(100, 160),
+                    "Volume": [1_000_000] * 60,
+                },
+                index=pd.date_range("2025-01-01", periods=60, freq="B"),
+            )
+
+            metrics = enricher._calculate_single_leadership_metrics(history, None)
+
+        self.assertGreater(metrics["up_down_volume_ratio_50d"], 1.0)
+        self.assertTrue(
+            _check_supply_demand(
+                {**metrics, "volume_trend_50_200": 1.0},
+                {
+                    "require_supply_demand": True,
+                    "up_down_volume_ratio_min": 1.0,
+                    "volume_trend_50_200_min": 0.9,
+                },
             )
         )
 

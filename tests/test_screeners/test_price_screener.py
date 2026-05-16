@@ -57,6 +57,46 @@ class TestPriceScreener(unittest.TestCase):
         self.assertEqual(args[0], "^GSPC")
         self.assertEqual(kwargs["progress"], False)
     
+    @patch('src.screeners.price_screener.requests.get')
+    @patch('src.screeners.price_screener.yf.download')
+    def test_get_market_performance_falls_back_to_yahoo_chart(self, mock_download, mock_get):
+        """If yfinance returns empty data, use Yahoo Chart API directly."""
+        mock_download.return_value = pd.DataFrame()
+        mock_response = Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            "chart": {
+                "result": [{
+                    "timestamp": [1640995200, 1643673600],
+                    "indicators": {"quote": [{
+                        "open": [100, 120],
+                        "high": [100, 120],
+                        "low": [100, 120],
+                        "close": [100, 120],
+                        "volume": [1000, 1000],
+                    }]},
+                }],
+                "error": None,
+            }
+        }
+        mock_get.return_value = mock_response
+
+        screener = PriceScreener(self.config)
+
+        self.assertAlmostEqual(screener.get_market_performance(), 0.2)
+        mock_get.assert_called_once()
+
+    @patch('src.screeners.price_screener.requests.get')
+    @patch('src.screeners.price_screener.yf.download')
+    def test_get_market_performance_returns_nan_when_market_data_missing(self, mock_download, mock_get):
+        """Missing benchmark data should not be treated as 0% market return."""
+        mock_download.return_value = pd.DataFrame()
+        mock_get.side_effect = RuntimeError("chart unavailable")
+
+        screener = PriceScreener(self.config)
+
+        self.assertTrue(np.isnan(screener.get_market_performance()))
+
     @patch('src.screeners.price_screener.yf.download')
     def test_get_stock_prices(self, mock_download):
         """Test get_stock_prices."""
@@ -126,8 +166,8 @@ class TestPriceScreener(unittest.TestCase):
         """Test apply_outperformance_filter."""
         # Create test data
         df = pd.DataFrame({
-            'ticker': ['aapl', 'msft', 'googl', 'amzn'],
-            'market_outperformance': [0.10, 0.05, -0.05, 0.20]  # Only aapl, msft, and amzn outperform
+            'ticker': ['aapl', 'msft', 'googl', 'amzn', 'nvda'],
+            'market_outperformance': [0.10, 0.05, -0.05, 0.20, np.nan]  # NaN should not pass
         })
         
         # Create price screener with outperform filter enabled
@@ -151,7 +191,16 @@ class TestPriceScreener(unittest.TestCase):
         # Try with filter disabled
         screener.criteria["outperform_sp500"] = False
         result = screener.apply_outperformance_filter(df)
-        self.assertEqual(len(result), 4)  # All stocks pass
+        self.assertEqual(len(result), 5)  # All stocks pass
+
+    def test_apply_outperformance_filter_fails_closed_without_metric(self):
+        """When outperformance is required, missing comparison data should pass no stocks."""
+        screener = PriceScreener({"screening_criteria": {"outperform_sp500": True}})
+        df = pd.DataFrame({"ticker": ["aapl", "msft"]})
+
+        result = screener.apply_outperformance_filter(df)
+
+        self.assertTrue(result.empty)
 
 
 if __name__ == '__main__':

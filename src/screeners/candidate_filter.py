@@ -199,6 +199,13 @@ def _evaluate_screening_candidate(
         criteria.get("debt_to_equity", float('inf')),
     )
 
+    base_depth = company.get("base_depth_65d")
+    base_signal = (
+        pd.notna(base_depth)
+        and base_depth <= pattern_criteria.get("base_depth_max", 0.35)
+    )
+    breakout_signal = bool(company.get("valid_breakout", False))
+
     results = {
         "eps": company.get("quarterly_eps_growth", 0) >= criteria.get("quarterly_eps_growth", 0),
         "eps_cagr": company.get("annual_eps_cagr", 0) >= criteria.get("annual_eps_cagr", 0),
@@ -217,8 +224,8 @@ def _evaluate_screening_candidate(
         "supply_demand": _check_supply_demand(company, supply_demand_criteria),
         "institutional": _check_institutional(company, institutional_criteria),
         "new_high": _check_pattern(company, pattern_criteria),
-        "base": False,
-        "breakout": False,
+        "base": base_signal,
+        "breakout": breakout_signal,
     }
 
     if criteria.get("outperform_sp500", False):
@@ -230,14 +237,16 @@ def _evaluate_screening_candidate(
             company.get("industry_rs_rank", 0) >= leadership_criteria.get("industry_rs_rank_min", 80)
             and company.get("industry_stock_rank", 0) >= leadership_criteria.get("industry_stock_rank_min", 80)
         )
-    if results["new_high"]:
-        results["base"] = True
-        results["breakout"] = True
+    pass_results = {
+        key: value
+        for key, value in results.items()
+        if key not in {"base", "breakout"}
+    }
 
     if test_mode:
         return results["mktcap"], results
 
-    return all(results.values()), results
+    return all(pass_results.values()), results
 
 
 def _filter_screening_candidates(

@@ -6,6 +6,7 @@ calculating market outperformance.
 """
 
 import os
+import requests
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -13,6 +14,9 @@ from typing import Dict, List, Any, Optional, Union
 from datetime import datetime, timedelta
 
 from src.utils.logger import setup_logger
+from src.utils.yahoo_finance import configure_yfinance_user_agent
+
+configure_yfinance_user_agent()
 
 # Set up logger
 logger = setup_logger("price_screener")
@@ -45,6 +49,40 @@ class PriceScreener:
         self.start_str = self.start_date.strftime('%Y-%m-%d')
         self.end_str = self.end_date.strftime('%Y-%m-%d')
         
+    @staticmethod
+    def _chart_response_to_history(payload: Dict[str, Any]) -> pd.DataFrame:
+        result = (payload.get("chart", {}).get("result") or [None])[0]
+        if not result or not result.get("timestamp"):
+            return pd.DataFrame()
+        quote = (result.get("indicators", {}).get("quote") or [None])[0]
+        if not quote:
+            return pd.DataFrame()
+        return pd.DataFrame(
+            {
+                "Open": quote.get("open"),
+                "High": quote.get("high"),
+                "Low": quote.get("low"),
+                "Close": quote.get("close"),
+                "Volume": quote.get("volume"),
+            },
+            index=pd.to_datetime(result["timestamp"], unit="s"),
+        ).dropna(how="all")
+
+    def _download_chart_history(self, ticker: str) -> pd.DataFrame:
+        response = requests.get(
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}",
+            params={
+                "period1": int(self.start_date.timestamp()),
+                "period2": int(self.end_date.timestamp()),
+                "interval": "1d",
+                "includePrePost": "false",
+            },
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return self._chart_response_to_history(response.json())
+
     def get_market_performance(self) -> float:
         """
         Get the performance of the market index over the specified time period.
@@ -62,10 +100,13 @@ class PriceScreener:
                 end=self.end_str,
                 progress=False
             )
+            if market_data.empty:
+                logger.warning(f"No yfinance data found for market index {self.market_index}; trying Yahoo Chart API")
+                market_data = self._download_chart_history(self.market_index)
             
             if market_data.empty:
                 logger.warning(f"No data found for market index {self.market_index}")
-                return 0.0
+                return np.nan
             
             # Calculate performance
             first_price = market_data['Close'].iloc[0]
@@ -77,7 +118,7 @@ class PriceScreener:
             
         except Exception as e:
             logger.error(f"Error getting market performance: {e}")
-            return 0.0
+            return np.nan
     
     def get_stock_prices(self, tickers: List[str], chunk_size: int = 50) -> pd.DataFrame:
         """
@@ -121,8 +162,19 @@ class PriceScreener:
                     if len(chunk_tickers) == 1:
                         ticker_data = price_data
                     else:
-                        ticker_data = price_data[ticker]
+                        try:
+                            ticker_data = price_data[ticker]
+                        except Exception:
+                            ticker_data = pd.DataFrame()
                     
+                    # Fall back to the direct Yahoo Chart endpoint when yfinance is empty.
+                    if ticker_data.empty:
+                        try:
+                            ticker_data = self._download_chart_history(ticker)
+                        except Exception as chart_error:
+                            logger.debug(f"Yahoo Chart fallback failed for {ticker}: {chart_error}")
+                            ticker_data = pd.DataFrame()
+
                     # Skip if no data
                     if ticker_data.empty:
                         logger.warning(f"No price data for {ticker}")
@@ -202,9 +254,12 @@ class PriceScreener:
             Filtered DataFrame
         """
         outperform_required = self.criteria.get("outperform_sp500", False)
-        if outperform_required and 'market_outperformance' in df.columns:
+        if outperform_required:
             before_count = len(df)
-            df = df[df['market_outperformance'] > 0]
+            if 'market_outperformance' not in df.columns:
+                logger.warning("Market outperformance is required, but comparison data is missing")
+                return df.iloc[0:0].copy()
+            df = df[df['market_outperformance'].gt(0).fillna(False)]
             logger.info(f"Applied market outperformance filter: {before_count} -> {len(df)} companies")
         
         return df

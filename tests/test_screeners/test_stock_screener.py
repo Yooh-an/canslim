@@ -191,6 +191,23 @@ class TestStockScreener(unittest.TestCase):
         self.assertTrue(all(filtered_df['debt_to_equity'] <= 1.0))
         self.assertTrue(all(filtered_df['has_complete_data'] == True))
 
+    def test_apply_all_filters_fails_closed_when_outperformance_missing(self):
+        """Required S&P outperformance should not be skipped when the metric column is absent."""
+        screener = StockScreener({
+            "data_paths": {
+                "processed_data_dir": os.path.join(self.temp_dir, "processed"),
+                "output_file": os.path.join(self.temp_dir, "processed", "results.csv"),
+            },
+            "screening_criteria": {
+                "outperform_sp500": True,
+            }
+        })
+        df = pd.DataFrame({"ticker": ["aapl", "msft"]})
+
+        filtered_df = screener.apply_all_filters(df)
+
+        self.assertTrue(filtered_df.empty)
+
 
 if __name__ == '__main__':
     unittest.main()

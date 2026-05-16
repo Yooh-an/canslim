@@ -144,6 +144,9 @@ class StockScreener:
             outperformance_column = self._metric_column("sp500_outperformance", filtered)
             if outperformance_column:
                 filtered = filtered[filtered[outperformance_column].gt(0).fillna(False)].copy()
+            else:
+                logger.warning("S&P outperformance is required, but comparison data is missing")
+                filtered = filtered.iloc[0:0].copy()
 
         return filtered
 
