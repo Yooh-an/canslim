@@ -1,3 +1,3 @@
 """
-Tests for API client modules.
+Tests for API clients in the application.
 """

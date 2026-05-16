@@ -1,3 +1,3 @@
 """
-Test package for Growth Stock Screener.
+Test package for the Growth Stock Screener application.
 """

@@ -1,40 +1,120 @@
 {
+  "_comment": "CAN SLIM/SEPA 성장주 스크리너 설정. JSON은 // 주석을 지원하지 않으므로 _comment 필드는 설명용이며 실행 로직에서는 무시됩니다.",
   "sec_api": {
-    "user_agent": "you0133@gmail.com",
+    "_comment": "SEC EDGAR API 호출 설정. C/A/S/L/I/M 조건이 아니라 원천 재무 데이터 수집용입니다.",
+    "user_agent": "SEC API User (you0133@gmail.com)",
     "rate_limit_delay": 0.1
   },
   "data_paths": {
+    "_comment": "입출력 파일 경로. data/raw와 data/processed는 Git에 올리지 않는 실행 산출물입니다.",
     "raw_data_dir": "data/raw",
     "processed_data_dir": "data/processed",
     "submissions_file": "data/raw/submissions.zip",
     "company_facts_dir": "data/raw/company_facts",
-    "output_file": "data/processed/results.csv"
+    "output_file": "data/processed/results.csv",
+    "cik_ticker_mapping": "data/processed/cik_ticker_mapping.csv"
   },
   "download_settings": {
+    "_comment": "SEC 다운로드 범위/속도 설정. company_limit=null이면 가능한 전체 회사를 대상으로 합니다.",
     "max_workers": 4,
     "max_retries": 3,
     "retry_delay": 5,
     "max_file_age_days": 30,
-    "company_limit": 100,
+    "company_limit": null,
     "force_download": false,
     "filter_by_ticker": true,
     "test_mode": false
   },
   "screening_criteria": {
-    "quarterly_eps_growth": 0.20,
-    "annual_eps_cagr": 0.20,
-    "revenue_growth": 0.15,
+    "_comment": "CAN SLIM의 C/A 품질 필터와 기본 유동성/시장초과수익 조건입니다.",
+    "_can_slim_C": "Current earnings: quarterly_eps_growth는 최근 분기 EPS 전년동기 대비 성장률 최소값입니다.",
+    "quarterly_eps_growth": 0.25,
+    "_can_slim_A": "Annual earnings: annual_eps_cagr는 연간 EPS 복합성장률 최소값입니다.",
+    "annual_eps_cagr": 0.25,
+    "_can_slim_growth_quality": "revenue_growth, profit_margin, roe는 성장의 질을 확인하는 보조 재무 필터입니다.",
+    "revenue_growth": 0.25,
     "profit_margin": 0.10,
-    "roe": 0.15,
-    "debt_to_equity": 1.0,
-    "outperform_sp500": false,
-    "min_market_cap": 200000000
+    "roe": 0.17,
+    "_can_slim_balance_sheet": "debt_to_equity는 재무 안정성 필터입니다. 값이 작을수록 보수적입니다.",
+    "debt_to_equity": 2.0,
+    "_can_slim_L": "Leadership: true이면 12개월 수익률이 SPY보다 높아야 합니다.",
+    "outperform_sp500": true,
+    "_liquidity_floor": "min_market_cap는 너무 작은 종목을 제외하는 최소 시가총액입니다.",
+    "min_market_cap": 300000000
+  },
+  "leadership_criteria": {
+    "_comment": "CAN SLIM의 L(Leader) 조건. Yahoo 가격 데이터로 자체 계산한 RS/가격 위치 필터입니다.",
+    "_rs_rating_note": "rs_rating_min은 자체 RS score의 universe 내 percentile 점수입니다. IBD 공식 RS Rating과 완전히 동일하지 않습니다.",
+    "rs_rating_min": 80,
+    "_price_vs_high_note": "price_vs_52w_high_min=0.85는 현재가가 52주 고점의 85% 이상이어야 한다는 뜻입니다.",
+    "price_vs_52w_high_min": 0.85,
+    "_liquidity_note": "avg_dollar_volume_min은 최근 50일 평균 거래대금 최소값입니다. 가격*거래량으로 계산합니다.",
+    "avg_dollar_volume_min": 20000000,
+    "_rs_line_note": "rs_line_near_high=true이면 종목/SPY 상대강도선이 최근 252일 고점 근처여야 합니다.",
+    "rs_line_near_high": true,
+    "_rs_line_threshold_note": "rs_line_high_threshold=0.95는 RS line이 최근 252일 고점의 95% 이상이어야 한다는 뜻입니다.",
+    "rs_line_high_threshold": 0.95,
+    "_industry_note": "industry_*는 업종 리더십 필터입니다. require_industry_leadership=false이면 실제 선별에는 쓰지 않습니다.",
+    "industry_rs_rank_min": 80,
+    "industry_stock_rank_min": 80,
+    "require_industry_leadership": false
+  },
+  "market_direction": {
+    "_comment": "CAN SLIM의 M(Market Direction). SPY 추세로 전체 시장 상태를 계산합니다.",
+    "_required_note": "required=true이면 시장 상태가 allowed_statuses 중 하나일 때만 종목 통과가 가능합니다.",
+    "required": true,
+    "allowed_statuses": ["confirmed_uptrend", "uptrend_under_pressure"]
+  },
+  "supply_demand_criteria": {
+    "_comment": "CAN SLIM의 S(Supply and Demand). 가격 상승일/하락일 거래량과 중기 거래량 추세를 봅니다.",
+    "_up_down_note": "up_down_volume_ratio_min은 최근 50일 상승일 거래량 합 / 하락일 거래량 합 최소값입니다.",
+    "up_down_volume_ratio_min": 1.1,
+    "_volume_trend_note": "volume_trend_50_200_min은 최근 50일 평균 거래량 / 최근 200일 평균 거래량 최소값입니다.",
+    "volume_trend_50_200_min": 1.0,
+    "_require_note": "require_supply_demand=true이면 위 두 거래량 조건을 반드시 통과해야 합니다.",
+    "require_supply_demand": true
+  },
+  "institutional_criteria": {
+    "_comment": "CAN SLIM의 I(Institutional Sponsorship). 현재 require=false라 선별에는 적용하지 않습니다.",
+    "institutional_ownership_min": 0.20,
+    "institutional_ownership_max": 0.95,
+    "require_institutional_sponsorship": false
+  },
+  "pattern_criteria": {
+    "_comment": "SEPA/CAN SLIM 차트 패턴 조건. 현재 require_*가 false라 필수 조건은 아니고 보조 지표로 계산됩니다.",
+    "_new_high_note": "require_new_52w_high=true이면 52주 신고가 근처 종목만 통과시킵니다.",
+    "require_new_52w_high": false,
+    "_pivot_note": "require_near_pivot=true이면 최근 pivot 가격 근처 종목만 통과시킵니다.",
+    "require_near_pivot": false,
+    "_breakout_note": "require_valid_breakout=true이면 pivot 돌파와 거래량 증가 조건을 요구합니다.",
+    "require_valid_breakout": false,
+    "_base_depth_note": "base_depth_max는 최근 65일 base 깊이의 최대 허용값입니다.",
+    "base_depth_max": 0.35,
+    "_breakout_volume_note": "breakout_volume_ratio_min은 돌파일 거래량 / 최근 50일 평균 거래량 최소값입니다.",
+    "breakout_volume_ratio_min": 1.4
+  },
+  "market_data": {
+    "_comment": "Yahoo Finance 기반 가격/거래량 enrichment 설정. leadership 모드에서 RS, 거래량, 시장 방향을 계산합니다.",
+    "_benchmark_note": "leadership_benchmark는 S&P500 대체 벤치마크입니다. 기본 SPY.",
+    "leadership_benchmark": "SPY",
+    "_period_note": "leadership_period=15mo는 12개월 수익률과 200일 거래량 계산을 위한 가격 다운로드 기간입니다.",
+    "leadership_period": "15mo",
+    "_chunk_note": "leadership_chunk_size는 Yahoo 가격 데이터를 한 번에 받을 ticker 수입니다.",
+    "leadership_chunk_size": 25,
+    "_universe_note": "leadership_universe_size=null이면 ticker가 있는 전체 회사를 대상으로 leadership 지표를 계산합니다.",
+    "leadership_universe_size": null,
+    "_cache_note": "price_cache_max_age_days는 가격 캐시 재사용 기간입니다. 최근 캐시가 있으면 재다운로드를 줄입니다.",
+    "price_cache_max_age_days": 2,
+    "_info_fallback_note": "use_yfinance_info_fallback=true이면 느린 yfinance info 조회까지 사용합니다.",
+    "use_yfinance_info_fallback": false
   },
   "optional_api_keys": {
-    "fmp_api_key": "6mZ1EnNvVbDjn7SSDtlMMda73VFAD5Gk"
+    "_comment": "선택 API 키. 현재 핵심 파이프라인은 SEC + Yahoo Finance만으로 동작합니다.",
+    "fmp_api_key": null
   },
   "logging": {
-    "level": "INFO",
+    "_comment": "로그 출력 설정.",
+    "level": "DEBUG",
     "log_file": "logs/screener.log"
   }
 }

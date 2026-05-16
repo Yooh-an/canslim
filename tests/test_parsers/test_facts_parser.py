@@ -82,7 +82,98 @@ class TestXBRLFactsParser(unittest.TestCase):
         self.assertEqual(facts["cik"], "0000123456")
         self.assertEqual(facts["entityName"], "Test Company")
         self.assertEqual(facts["tickers"], ["TEST"])
-        
+
+    def test_quarterly_flow_uses_fact_period_year_for_derived_q4(self):
+        """Historical annual facts from newer filings should not create fake latest-year Q4 values."""
+        concept_data = {
+            "units": {
+                "USD": [
+                    {"form": "10-Q", "fy": 2023, "fp": "Q1", "start": "2023-01-01", "end": "2023-03-31", "filed": "2023-05-01", "val": 10},
+                    {"form": "10-Q", "fy": 2023, "fp": "Q2", "start": "2023-04-01", "end": "2023-06-30", "filed": "2023-08-01", "val": 20},
+                    {"form": "10-Q", "fy": 2023, "fp": "Q3", "start": "2023-07-01", "end": "2023-09-30", "filed": "2023-11-01", "val": 30},
+                    {"form": "10-K", "fy": 2025, "fp": "FY", "start": "2023-01-01", "end": "2023-12-31", "filed": "2026-02-01", "val": 100},
+                ]
+            }
+        }
+
+        series = self.parser._quarterly_flow_series(concept_data, ["USD"])
+        values = {item["period_key"]: item["val"] for item in series}
+
+        self.assertEqual(values["2023Q4"], 40)
+        self.assertNotIn("2025Q4", values)
+
+    def test_profit_margin_uses_quarterly_income_not_ytd_income(self):
+        """Profit margin should compare quarterly revenue with quarterly net income."""
+        us_gaap_facts = {
+            "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                "units": {
+                    "USD": [
+                        {"form": "10-Q", "fy": 2025, "fp": "Q2", "start": "2025-04-01", "end": "2025-06-30", "filed": "2025-08-01", "val": 200},
+                    ]
+                }
+            },
+            "NetIncomeLoss": {
+                "units": {
+                    "USD": [
+                        {"form": "10-Q", "fy": 2025, "fp": "Q2", "start": "2025-01-01", "end": "2025-06-30", "filed": "2025-08-01", "val": 50},
+                        {"form": "10-Q", "fy": 2025, "fp": "Q2", "start": "2025-04-01", "end": "2025-06-30", "filed": "2025-08-01", "val": 20},
+                    ]
+                }
+            },
+        }
+        metrics = {}
+
+        self.parser._extract_revenue_metrics(us_gaap_facts, metrics)
+        self.parser._extract_income_metrics(us_gaap_facts, metrics)
+        self.parser._calculate_derived_metrics(metrics)
+
+        self.assertAlmostEqual(metrics["profit_margin"], 0.10)
+
+    def test_revenue_extraction_prefers_newest_available_tag(self):
+        """A stale high-priority revenue tag should not override a newer revenue tag."""
+        us_gaap_facts = {
+            "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                "units": {
+                    "USD": [
+                        {"form": "10-Q", "fy": 2017, "fp": "Q1", "start": "2017-01-01", "end": "2017-03-31", "filed": "2017-05-01", "val": 100},
+                        {"form": "10-Q", "fy": 2018, "fp": "Q1", "start": "2018-01-01", "end": "2018-03-31", "filed": "2018-05-01", "val": 150},
+                    ]
+                }
+            },
+            "Revenues": {
+                "units": {
+                    "USD": [
+                        {"form": "10-Q", "fy": 2025, "fp": "Q1", "start": "2025-01-01", "end": "2025-03-31", "filed": "2025-05-01", "val": 200},
+                        {"form": "10-Q", "fy": 2026, "fp": "Q1", "start": "2026-01-01", "end": "2026-03-31", "filed": "2026-05-01", "val": 260},
+                    ]
+                }
+            },
+        }
+        metrics = {}
+
+        self.parser._extract_revenue_metrics(us_gaap_facts, metrics)
+
+        self.assertEqual(metrics["revenue_period"], "2026Q1")
+        self.assertAlmostEqual(metrics["revenue_growth"], 0.30)
+
+    def test_revenue_extraction_skips_stale_concept_data(self):
+        """Stale revenue facts should not be mixed with current EPS or balance-sheet data."""
+        us_gaap_facts = {
+            "Revenues": {
+                "units": {
+                    "USD": [
+                        {"form": "10-Q", "fy": 2016, "fp": "Q4", "start": "2016-10-01", "end": "2016-12-31", "filed": "2017-02-01", "val": 100},
+                        {"form": "10-Q", "fy": 2017, "fp": "Q4", "start": "2017-10-01", "end": "2017-12-31", "filed": "2018-02-01", "val": 200},
+                    ]
+                }
+            }
+        }
+        metrics = {"_latest_fact_end": pd.Timestamp("2026-03-31")}
+
+        self.parser._extract_revenue_metrics(us_gaap_facts, metrics)
+
+        self.assertNotIn("revenue_growth", metrics)
+         
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,74 +1,62 @@
 """
-Logging utilities for the Growth Stock Screener application.
+Logging utility module for the application.
 """
 
-import logging
 import os
+import sys
+import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import Optional
 
-# Try to import colorlog, but handle case where it's not installed
-try:
-    import colorlog
-    has_colorlog = True
-except ImportError:
-    has_colorlog = False
-
-def setup_logger(name, log_file=None, level=logging.INFO):
+def setup_logger(name: str, log_file: Optional[str] = None, level: Optional[int] = None, log_level: Optional[str] = None) -> logging.Logger:
     """
     Set up a logger with specified name, file, and level.
     
     Args:
         name: Logger name
-        log_file: Optional log file path
-        level: Logging level
+        log_file: Optional file path to write logs to
+        level: Optional logging level as an int
+        log_level: Optional logging level as a string (e.g., "DEBUG", "INFO")
         
     Returns:
         Configured logger
     """
+    # Convert string log level to int if provided
+    if log_level and not level:
+        level = getattr(logging, log_level.upper(), logging.INFO)
+    
+    # Default to INFO if no level specified
+    if level is None:
+        level = logging.INFO
+        
     # Create logger
     logger = logging.getLogger(name)
     logger.setLevel(level)
     
-    # Remove existing handlers to avoid duplicate logging
-    for handler in logger.handlers[:]:
-        logger.removeHandler(handler)
+    # Clear existing handlers
+    if logger.hasHandlers():
+        logger.handlers.clear()
     
-    # Create formatters
-    if has_colorlog:
-        # Use ColoredFormatter instead of ColorFormatter
-        color_formatter = colorlog.ColoredFormatter(
-            "%(log_color)s%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            log_colors={
-                'DEBUG': 'cyan',
-                'INFO': 'green',
-                'WARNING': 'yellow',
-                'ERROR': 'red',
-                'CRITICAL': 'red,bg_white',
-            }
-        )
-        formatter = color_formatter
-    else:
-        # Standard formatter if colorlog is not available
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    # Create formatter
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     
     # Add console handler
-    ch = logging.StreamHandler()
-    ch.setLevel(level)
-    ch.setFormatter(formatter)
-    logger.addHandler(ch)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(level)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
     
-    # Optionally add file handler
+    # Add file handler if log file specified
     if log_file:
-        # Ensure log directory exists
+        # Create directory for log file if it doesn't exist
         log_dir = os.path.dirname(log_file)
-        if log_dir:
-            Path(log_dir).mkdir(parents=True, exist_ok=True)
-            
-        # Add file handler (without colors for log file)
-        plain_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        fh = logging.FileHandler(log_file)
-        fh.setLevel(level)
-        fh.setFormatter(plain_formatter)
-        logger.addHandler(fh)
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
+        
+        # Use a rotating file handler (max 5MB, keep 3 backups)
+        file_handler = RotatingFileHandler(log_file, maxBytes=5*1024*1024, backupCount=3)
+        file_handler.setLevel(level)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
     
     return logger

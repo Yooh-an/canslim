@@ -167,6 +167,7 @@ class SubmissionsCollector:
         
         # Create list of companies meeting criteria
         companies_list = []
+        companies_with_tickers = []
         ticker_count = 0
         
         for cik, company in companies_data.items():
@@ -174,23 +175,29 @@ class SubmissionsCollector:
             if company.get("tickers"):
                 ticker_count += 1
                 
-            # Skip companies without tickers
-            if not company.get("tickers"):
-                continue
-            
-            # Apply market cap filter if provided
-            if min_market_cap is not None and company.get("marketCap", 0) < min_market_cap:
-                continue
-            
-            # Add to list
-            companies_list.append({
-                "cik": cik,
-                "name": company.get("name", ""),
-                "ticker": company.get("tickers", [""])[0],
-                "market_cap": company.get("marketCap", 0),
-                "sic": company.get("sic", ""),
-                "category": company.get("category", "")
-            })
+                # 티커가 있는 회사만 리스트에 추가
+                company_info = {
+                    "cik": cik,
+                    "name": company.get("name", ""),
+                    "ticker": company.get("tickers", [""])[0],
+                    "market_cap": company.get("marketCap", 0),
+                    "sic": company.get("sic", ""),
+                    "category": company.get("category", "")
+                }
+                companies_with_tickers.append(company_info)
         
-        logger.info(f"Found {ticker_count} companies with tickers, {len(companies_list)} meeting criteria")
-        return companies_list
+        # 디버깅을 위해 필터링 전 회사 수를 로깅
+        logger.info(f"Before filtering, found {len(companies_with_tickers)} companies with tickers")
+        
+        # 시가총액 필터링 비활성화 (디버깅용)
+        filtered_companies = companies_with_tickers
+        
+        # 원래 시가총액 필터링 로직 (주석 처리)
+        # if min_market_cap:
+        #     filtered_companies = [c for c in companies_with_tickers if c.get("market_cap", 0) >= min_market_cap]
+        # else:
+        #     filtered_companies = companies_with_tickers
+        
+        logger.info(f"Found {len(companies_with_tickers)} companies with tickers, {len(filtered_companies)} meeting criteria")
+        
+        return filtered_companies

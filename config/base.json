@@ -1,0 +1,42 @@
+{
+  "_comment": "Shared runtime settings for profile-based screeners.",
+  "sec_api": {
+    "user_agent": "SEC API User (you0133@gmail.com)",
+    "rate_limit_delay": 0.1
+  },
+  "data_paths": {
+    "raw_data_dir": "data/raw",
+    "processed_data_dir": "data/processed",
+    "submissions_file": "data/raw/submissions.zip",
+    "company_facts_dir": "data/raw/company_facts",
+    "output_file": "data/processed/results.csv",
+    "cik_ticker_mapping": "data/processed/cik_ticker_mapping.csv"
+  },
+  "download_settings": {
+    "max_workers": 4,
+    "max_retries": 3,
+    "retry_delay": 5,
+    "max_file_age_days": 30,
+    "company_limit": null,
+    "force_download": false,
+    "filter_by_ticker": true,
+    "test_mode": false
+  },
+  "market_data": {
+    "leadership_benchmark": "SPY",
+    "leadership_period": "15mo",
+    "leadership_chunk_size": 25,
+    "leadership_universe_size": null,
+    "price_cache_max_age_days": 2,
+    "enrich_only_screenable_candidates": false,
+    "yfinance_max_workers": 6,
+    "use_yfinance_info_fallback": false
+  },
+  "optional_api_keys": {
+    "fmp_api_key": null
+  },
+  "logging": {
+    "level": "DEBUG",
+    "log_file": "logs/screener.log"
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "extends": "../base.json",
+  "profile_name": "canslim_hybrid",
+  "data_paths": {
+    "output_file": "data/processed/results_canslim_hybrid.csv"
+  },
+  "screening_criteria": {
+    "_comment": "Hybrid CANSLIM + SEPA keeps growth quality strict.",
+    "quarterly_eps_growth": 0.25,
+    "annual_eps_cagr": 0.25,
+    "revenue_growth": 0.25,
+    "profit_margin": 0.10,
+    "roe": 0.17,
+    "debt_to_equity": 2.0,
+    "outperform_sp500": true,
+    "min_market_cap": 300000000
+  },
+  "leadership_criteria": {
+    "_comment": "Hybrid profile leans harder on technical leadership and liquidity quality.",
+    "rs_rating_min": 80,
+    "price_vs_52w_high_min": 0.85,
+    "avg_dollar_volume_min": 20000000,
+    "rs_line_near_high": true,
+    "rs_line_high_threshold": 0.95,
+    "require_industry_leadership": false
+  },
+  "market_direction": {
+    "required": true,
+    "allowed_statuses": [
+      "confirmed_uptrend",
+      "uptrend_under_pressure"
+    ]
+  },
+  "supply_demand_criteria": {
+    "_comment": "Hybrid profile wants accumulation plus quiet volume in the setup, and only demands a volume surge on an actual breakout.",
+    "require_supply_demand": true,
+    "up_down_volume_ratio_min": 1.1,
+    "volume_trend_50_200_min": 0.85,
+    "require_breakout_volume_confirmation": true,
+    "confirm_volume_for_near_pivot": false,
+    "breakout_volume_ratio_min": 1.4,
+    "require_volume_dry_up": true,
+    "volume_dry_up_ratio_max": 0.95
+  },
+  "institutional_criteria": {
+    "_comment": "Hybrid keeps institutional sponsorship optional because setup quality is the main overlay.",
+    "require_institutional_sponsorship": false
+  },
+  "pattern_criteria": {
+    "_comment": "SEPA overlay: either a valid breakout or a tight, shallow setup near pivot with RS line strength.",
+    "require_hybrid_setup": true,
+    "price_vs_52w_high_min": 0.85,
+    "base_depth_max": 0.40,
+    "require_rs_line_near_high_for_setup": true,
+    "allow_hybrid_breakout": true,
+    "require_new_52w_high": false,
+    "require_near_pivot": false,
+    "require_valid_breakout": false,
+    "require_base_depth": false,
+    "breakout_volume_ratio_min": 1.4
+  }
+}

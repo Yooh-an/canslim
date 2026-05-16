@@ -2,8 +2,10 @@
 __pycache__/
 .DS_Store
 *.log
-data/raw/
-data/processed/
+data/
 logs/
 .env
 venv/
+.venv/
+canslimsepa/
+.coverage

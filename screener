@@ -1,0 +1,34 @@
+#!/bin/sh
+set -eu
+
+ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PYTHON="$ROOT_DIR/canslimsepa/bin/python"
+
+if [ ! -x "$PYTHON" ]; then
+  PYTHON=${PYTHON:-python3}
+fi
+
+if [ "$#" -eq 0 ]; then
+  set -- screen
+fi
+
+case "$1" in
+  download|parse|enrich|leadership|financials|screen)
+    MODE=$1
+    shift
+    exec "$PYTHON" "$ROOT_DIR/run_screener.py" --mode "$MODE" --config "$ROOT_DIR/config/config.json" "$@"
+    ;;
+  all)
+    shift
+    "$PYTHON" "$ROOT_DIR/run_screener.py" --mode download --config "$ROOT_DIR/config/config.json" "$@"
+    "$PYTHON" "$ROOT_DIR/run_screener.py" --mode parse --config "$ROOT_DIR/config/config.json" "$@"
+    "$PYTHON" "$ROOT_DIR/run_screener.py" --mode enrich --config "$ROOT_DIR/config/config.json" "$@"
+    "$PYTHON" "$ROOT_DIR/run_screener.py" --mode leadership --config "$ROOT_DIR/config/config.json" "$@"
+    exec "$PYTHON" "$ROOT_DIR/run_screener.py" --mode screen --config "$ROOT_DIR/config/config.json" "$@"
+    ;;
+  *)
+    echo "Usage: ./screener [download|parse|enrich|leadership|financials|screen|all] [extra args]" >&2
+    echo "Example: ./screener screen" >&2
+    exit 2
+    ;;
+esac

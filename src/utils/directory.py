@@ -15,24 +15,48 @@ def ensure_directories(config):
     Args:
         config: Application configuration dictionary
     """
-    # Create data directories
     data_paths = config.get("data_paths", {})
-    dirs_to_create = [
-        data_paths.get("raw_data_dir", "data/raw"),
-        data_paths.get("processed_data_dir", "data/processed"),
-        data_paths.get("company_facts_dir", "data/raw/company_facts"),
-        os.path.dirname(data_paths.get("output_file", "data/processed/results.csv")),
+    
+    # List of required directories with user-friendly names
+    required_dirs = [
+        ("raw_data_dir", data_paths.get("raw_data_dir", "data/raw")),
+        ("processed_data_dir", data_paths.get("processed_data_dir", "data/processed")),
+        ("company_facts_dir", data_paths.get("company_facts_dir", "data/raw/company_facts")),
+        ("financial_data_dir", os.path.join(data_paths.get("raw_data_dir", "data/raw"), "financial_data"))
     ]
     
-    # Create log directory
-    log_file = config.get("logging", {}).get("log_file", "logs/screener.log")
-    if log_file:
-        dirs_to_create.append(os.path.dirname(log_file))
+    # Check each directory
+    missing_dirs = []
+    for name, path in required_dirs:
+        if not os.path.exists(path):
+            try:
+                Path(path).mkdir(parents=True, exist_ok=True)
+                logger.debug(f"Created directory: {path}")
+            except Exception as e:
+                missing_dirs.append((name, path, str(e)))
     
-    # Create all directories
-    for directory in dirs_to_create:
-        if directory:
-            Path(directory).mkdir(parents=True, exist_ok=True)
-            logger.debug(f"Directory ensured: {directory}")
+    # Report any issues
+    if missing_dirs:
+        logger.warning("The following directories could not be created:")
+        for name, path, error in missing_dirs:
+            logger.warning(f"- {name}: {path} (Error: {error})")
+        return False
+        
+    return True
+
+def check_file_permissions(file_path):
+    """Check if a file has proper read/write permissions"""
+    if not os.path.exists(file_path):
+        return False, "File does not exist"
+        
+    readable = os.access(file_path, os.R_OK)
+    writable = os.access(file_path, os.W_OK)
     
-    logger.info("All required directories have been created.")
+    if readable and writable:
+        return True, "File has proper permissions"
+    elif readable:
+        return False, "File is readable but not writable"
+    elif writable:
+        return False, "File is writable but not readable"
+    else:
+        return False, "File is neither readable nor writable"

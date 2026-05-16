@@ -1,0 +1,1063 @@
+"""
+Market Data Enricher
+
+Module for enriching company data with market data from SEC EDGAR.
+"""
+
+import os
+import json
+import requests
+import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import pandas as pd
+import numpy as np
+from typing import Dict, List, Any, Optional
+from pathlib import Path
+
+try:
+    import yfinance as yf
+except ImportError:
+    yf = None
+
+logger = logging.getLogger(__name__)
+
+class MarketDataEnricher:
+    """Enriches company data with market information from SEC data."""
+    
+    def __init__(self, config):
+        """
+        Initialize the MarketDataEnricher.
+        
+        Args:
+            config: Application configuration
+        """
+        self.config = config
+        self.api_key = config.get("optional_api_keys", {}).get("fmp_api_key")
+        
+        logger.info("Using yfinance market data with SEC fallback")
+        
+        # Get paths from config
+        data_paths = config.get("data_paths", {})
+        self.processed_dir = data_paths.get("processed_data_dir", "data/processed")
+        self.financial_data_dir = os.path.join(
+            data_paths.get("raw_data_dir", "data/raw"), 
+            "financial_data"
+        )
+        self.market_data_dir = os.path.join(self.financial_data_dir, "market_data")
+        self.price_cache_dir = os.path.join(
+            data_paths.get("raw_data_dir", "data/raw"),
+            "price_history",
+        )
+        Path(self.market_data_dir).mkdir(parents=True, exist_ok=True)
+        Path(self.price_cache_dir).mkdir(parents=True, exist_ok=True)
+
+    def _progress(self, message: str) -> None:
+        """Print progress even when logging handlers are not attached to this module."""
+        logger.info(message)
+        print(f"[enrich] {message}", flush=True)
+    
+    def enrich_companies_with_market_data(self, max_companies: int = 100) -> List[Dict]:
+        """
+        Enrich companies with market data from SEC.
+        
+        Args:
+            max_companies: Maximum number of companies to enrich
+            
+        Returns:
+            List of enriched company dictionaries
+        """
+        # Load companies list
+        companies_list_file = os.path.join(self.processed_dir, "companies_list.json")
+        if not os.path.exists(companies_list_file):
+            logger.error(f"Companies list file not found: {companies_list_file}")
+            return []
+        
+        with open(companies_list_file, 'r') as f:
+            companies = json.load(f)
+        
+        logger.info(f"Loaded {len(companies)} companies for market data enrichment")
+        self._progress(f"Loaded {len(companies)} companies")
+        
+        companies_to_enrich = self._prioritize_market_data_candidates(companies, max_companies)
+        companies_by_ticker = {
+            self._normalize_yahoo_ticker(company.get("ticker", "")): company
+            for company in companies_to_enrich
+            if company.get("ticker")
+        }
+        self._progress(f"Selected {len(companies_to_enrich)} companies / {len(companies_by_ticker)} tickers for market data")
+        
+        # Check for existing market data files
+        market_data_dir = self.market_data_dir
+            
+        # Load existing market data files
+        market_data = self._load_market_data_files(market_data_dir)
+        tickers_to_fetch = [
+            ticker for ticker in companies_by_ticker.keys()
+            if ticker not in market_data
+        ]
+        self._progress(f"Loaded cached market data for {len(market_data)} tickers; {len(tickers_to_fetch)} tickers need yfinance lookup")
+        yf_market_data = self._fetch_yfinance_market_data(tickers_to_fetch)
+        market_data.update(yf_market_data)
+        self._progress("Calculating leadership, RS, volume, and pattern metrics")
+        leadership_data = self._calculate_leadership_metrics(companies)
+        market_data.update(leadership_data)
+        
+        # Enrich companies with market data
+        enriched_count = 0
+        
+        for i, company in enumerate(companies_to_enrich):
+            ticker = company.get("ticker", "")
+            if not ticker:
+                continue
+            yahoo_ticker = self._normalize_yahoo_ticker(ticker)
+            
+            # Check if we have market data for this ticker
+            if yahoo_ticker in market_data:
+                # Extract market cap and other metrics
+                company_market_data = market_data[yahoo_ticker]
+                
+                # Add market cap
+                if "market_cap" in company_market_data:
+                    company["market_cap"] = company_market_data["market_cap"]
+                    company["market_cap_source"] = company_market_data.get("market_cap_source", "sec_data")
+                    enriched_count += 1
+                
+                # Add book value if available
+                if "book_value" in company_market_data:
+                    company["book_value"] = company_market_data["book_value"]
+                
+                # Add TTM metrics if available
+                if "ttm_revenue" in company_market_data:
+                    company["ttm_revenue"] = company_market_data["ttm_revenue"]
+                
+                if "ttm_net_income" in company_market_data:
+                    company["ttm_net_income"] = company_market_data["ttm_net_income"]
+                
+                # Add P/S ratio if available
+                if "price_to_sales" in company_market_data:
+                    company["price_to_sales"] = company_market_data["price_to_sales"]
+
+                if "current_price" in company_market_data:
+                    company["current_price"] = company_market_data["current_price"]
+
+                if "shares_outstanding" in company_market_data:
+                    company["shares_outstanding"] = company_market_data["shares_outstanding"]
+
+                for field in [
+                    "price_return_3m",
+                    "price_return_6m",
+                    "price_return_9m",
+                    "price_return_12m",
+                    "market_outperformance_12m",
+                    "rs_score",
+                    "rs_rating",
+                    "rs_line_near_high",
+                    "price_vs_52w_high",
+                    "avg_dollar_volume_50d",
+                    "volume_trend_50_200",
+                    "up_down_volume_ratio_50d",
+                    "volume_dry_up_ratio_10_50",
+                    "breakout_volume_ratio",
+                    "new_52w_high",
+                    "new_20d_high",
+                    "base_depth_65d",
+                    "base_tightness_3w",
+                    "pivot_price",
+                    "breakout_pct",
+                    "near_pivot",
+                    "valid_breakout",
+                    "sector",
+                    "industry",
+                    "institutional_ownership",
+                    "institutional_holders",
+                    "industry_rs_rank",
+                    "industry_stock_rank",
+                    "industry_group",
+                ]:
+                    if field in company_market_data:
+                        company[field] = company_market_data[field]
+            
+            # If no market data available, use SEC financial metrics to estimate
+            if not company.get("market_cap") and company.get("equity") and company.get("assets"):
+                book_value = company.get("equity", 0)
+                
+                # Use book value as a simple estimate if no other data available
+                company["market_cap"] = book_value
+                company["market_cap_source"] = "estimated_from_book_value"
+                company["book_value"] = book_value
+                enriched_count += 1
+                
+                # Add simple price to book ratio of 1.5x (conservative estimate)
+                estimated_market_cap = book_value * 1.5
+                company["estimated_market_cap"] = estimated_market_cap
+
+            if (i + 1) % 500 == 0:
+                self._progress(f"Applied market data to {i + 1}/{len(companies_to_enrich)} companies")
+        
+        logger.info(f"Enriched {enriched_count} companies with market data")
+        self._progress(f"Enriched {enriched_count} companies with market data")
+        
+        # Save enriched data
+        output_file = os.path.join(self.processed_dir, "companies_list_enriched.json")
+        with open(output_file, 'w') as f:
+            json.dump(companies, f, indent=2)
+        
+        logger.info(f"Saved enriched company data to {output_file}")
+        self._progress(f"Saved enriched company data to {output_file}")
+        return companies
+
+    def enrich_companies_with_leadership_data(self) -> List[Dict]:
+        """Add only price-based CAN SLIM leadership data, preserving existing enrichment."""
+        enriched_file = os.path.join(self.processed_dir, "companies_list_enriched.json")
+        companies_list_file = os.path.join(self.processed_dir, "companies_list.json")
+        source_file = enriched_file if os.path.exists(enriched_file) else companies_list_file
+        if not os.path.exists(source_file):
+            logger.error(f"Companies list file not found: {source_file}")
+            return []
+
+        with open(source_file, "r") as f:
+            companies = json.load(f)
+
+        self._progress(f"Loaded {len(companies)} companies from {source_file}")
+        self._progress("Skipping slow market-cap lookup; running only price/RS/volume/market-direction enrichment")
+        leadership_data = self._calculate_leadership_metrics(companies, cached_only=True)
+        if not leadership_data:
+            self._progress("No leadership data was calculated")
+            return companies
+
+        leadership_fields = [
+            "price_return_3m",
+            "price_return_6m",
+            "price_return_9m",
+            "price_return_12m",
+            "market_outperformance_12m",
+            "rs_score",
+            "rs_rating",
+            "rs_line_near_high",
+            "price_vs_52w_high",
+            "avg_dollar_volume_50d",
+            "volume_trend_50_200",
+            "up_down_volume_ratio_50d",
+            "volume_dry_up_ratio_10_50",
+            "breakout_volume_ratio",
+            "new_52w_high",
+            "new_20d_high",
+            "base_depth_65d",
+            "base_tightness_3w",
+            "pivot_price",
+            "breakout_pct",
+            "near_pivot",
+            "valid_breakout",
+            "industry_rs_rank",
+            "industry_stock_rank",
+            "industry_group",
+        ]
+
+        updated = 0
+        for company in companies:
+            ticker = self._normalize_yahoo_ticker(company.get("ticker", ""))
+            if not ticker or ticker not in leadership_data:
+                continue
+            metrics = leadership_data[ticker]
+            for field in leadership_fields:
+                if field in metrics:
+                    company[field] = metrics[field]
+            updated += 1
+
+        for output_file in [enriched_file, companies_list_file]:
+            with open(output_file, "w") as f:
+                json.dump(companies, f, indent=2)
+        self._progress(f"Applied leadership data to {updated} companies")
+        self._progress(f"Saved updated files: {enriched_file}, {companies_list_file}")
+        return companies
+
+    def _prioritize_market_data_candidates(self, companies: List[Dict], max_companies: Optional[int]) -> List[Dict]:
+        """Prefer likely screen results before applying the cap."""
+        market_data_config = self.config.get("market_data", {})
+        prefer_screenable_only = market_data_config.get("enrich_only_screenable_candidates", True)
+
+        metric_fields = [
+            "quarterly_eps_growth",
+            "annual_eps_cagr",
+            "revenue_growth",
+            "profit_margin",
+            "roe",
+            "debt_to_equity",
+        ]
+        financial_candidates = [
+            company for company in companies
+            if self._passes_non_market_screen(company)
+        ]
+        with_metrics = [
+            company for company in companies
+            if any(pd.notna(company.get(field)) for field in metric_fields)
+        ]
+        if prefer_screenable_only:
+            prioritized = financial_candidates or with_metrics
+        else:
+            prioritized = [company for company in companies if company.get("ticker")]
+
+        if not prioritized:
+            prioritized = [company for company in companies if company.get("ticker")]
+
+        if max_companies and max_companies > 0:
+            prioritized = prioritized[:max_companies]
+        logger.info(f"Selected {len(prioritized)} companies for market data enrichment")
+        return prioritized
+
+    def _passes_non_market_screen(self, company: Dict[str, Any]) -> bool:
+        """Check the financial filters that do not require market data."""
+        criteria = self.config.get("screening_criteria", {})
+        required_minimums = {
+            "quarterly_eps_growth": criteria.get("quarterly_eps_growth", 0),
+            "annual_eps_cagr": criteria.get("annual_eps_cagr", 0),
+            "revenue_growth": criteria.get("revenue_growth", 0),
+            "profit_margin": criteria.get("profit_margin", 0),
+            "roe": criteria.get("roe", 0),
+        }
+        for field, threshold in required_minimums.items():
+            value = company.get(field)
+            if not pd.notna(value) or value < threshold:
+                return False
+
+        debt_to_equity = company.get("debt_to_equity")
+        if not pd.notna(debt_to_equity):
+            return False
+        if debt_to_equity > 0 and debt_to_equity > criteria.get("debt_to_equity", float("inf")):
+            return False
+
+        return bool(company.get("ticker"))
+
+    @staticmethod
+    def _normalize_yahoo_ticker(ticker: str) -> str:
+        """Convert SEC-style class tickers to Yahoo Finance symbols."""
+        if not ticker:
+            return ""
+        return str(ticker).strip().replace(".", "-")
+
+    def _fetch_yfinance_market_data(self, tickers: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Fetch free market-cap data from Yahoo Finance through yfinance."""
+        if yf is None:
+            logger.warning("yfinance is not installed; skipping live market data")
+            return {}
+
+        market_data = {}
+        unique_tickers = [ticker for ticker in dict.fromkeys(tickers) if ticker]
+        logger.info(f"Fetching yfinance market data for {len(unique_tickers)} tickers")
+        if not unique_tickers:
+            self._progress("No uncached yfinance market-cap lookups needed")
+            return {}
+        self._progress(f"Fetching yfinance market-cap data for {len(unique_tickers)} tickers")
+        max_workers = self.config.get("market_data", {}).get(
+            "yfinance_max_workers",
+            self.config.get("download_settings", {}).get("max_workers", 4),
+        )
+        max_workers = max(1, min(int(max_workers), 12))
+        self._progress(f"Using {max_workers} workers for yfinance market-data lookups")
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_ticker = {
+                executor.submit(self._fetch_single_yfinance_ticker, ticker): ticker
+                for ticker in unique_tickers
+            }
+            for index, future in enumerate(as_completed(future_to_ticker), start=1):
+                ticker = future_to_ticker[future]
+                try:
+                    if index == 1 or index % 10 == 0:
+                        self._progress(f"Yfinance market-cap lookup {index}/{len(unique_tickers)}: {ticker}")
+                    data = future.result()
+                    if data:
+                        market_data[ticker] = data
+                        self._save_market_data_file(ticker, data)
+
+                    if index % 25 == 0:
+                        logger.info(f"Fetched yfinance data for {index}/{len(unique_tickers)} tickers")
+                        self._progress(f"Fetched yfinance market-cap data for {index}/{len(unique_tickers)} tickers")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch yfinance data for {ticker}: {e}")
+                    self._progress(f"Failed yfinance market-cap lookup {index}/{len(unique_tickers)}: {ticker} ({e})")
+
+        logger.info(f"Fetched yfinance market data for {len(market_data)} tickers")
+        self._progress(f"Fetched yfinance market data for {len(market_data)} tickers")
+        return market_data
+
+    def _calculate_leadership_metrics(self, companies: List[Dict[str, Any]], cached_only: bool = False) -> Dict[str, Dict[str, Any]]:
+        """Calculate CAN SLIM leadership metrics from price and volume history."""
+        if yf is None:
+            logger.warning("yfinance is not installed; skipping leadership metrics")
+            return {}
+
+        market_data_config = self.config.get("market_data", {})
+        leadership_universe_size = market_data_config.get("leadership_universe_size", 200)
+        metric_universe = [
+            company for company in self._prioritize_leadership_universe(companies, leadership_universe_size)
+            if company.get("ticker") and (leadership_universe_size is None or self._has_financial_metrics(company))
+        ]
+        if not metric_universe:
+            logger.warning("No companies with financial metrics available for leadership calculations")
+            return {}
+
+        ticker_to_company = {
+            self._normalize_yahoo_ticker(company.get("ticker")): company
+            for company in metric_universe
+        }
+        tickers = list(ticker_to_company.keys())
+        benchmark = market_data_config.get("leadership_benchmark", "SPY")
+        period = market_data_config.get("leadership_period", "15mo")
+        chunk_size = market_data_config.get("leadership_chunk_size", 100)
+
+        logger.info(f"Calculating leadership metrics for {len(tickers)} tickers")
+        self._progress(f"Calculating leadership metrics for {len(tickers)} tickers")
+        price_history = self._download_price_history(tickers, period, chunk_size, cached_only=cached_only)
+        benchmark_history = self._download_single_history(benchmark, period)
+        self._save_market_direction(benchmark_history, market_data_config)
+        if not price_history:
+            return {}
+
+        benchmark_close = self._history_series(benchmark_history, "Close")
+        if benchmark_close.empty:
+            benchmark_close = None
+        results = {}
+        for index, (ticker, history) in enumerate(price_history.items(), start=1):
+            metrics = self._calculate_single_leadership_metrics(history, benchmark_close)
+            if metrics:
+                group = self._industry_group_for_company(ticker_to_company[ticker])
+                metrics["ticker"] = ticker
+                if group:
+                    metrics["industry_group"] = group
+                results[ticker] = metrics
+            if index % 500 == 0:
+                self._progress(f"Calculated leadership metrics for {index}/{len(price_history)} price histories")
+
+        self._add_percentile_ranks(results, "rs_score", "rs_rating", scale=99)
+        self._add_industry_ranks(results)
+
+        cached_market_data = self._load_market_data_files(self.market_data_dir)
+        for ticker, metrics in results.items():
+            cached = cached_market_data.get(ticker, {})
+            cached.update(metrics)
+            self._save_market_data_file(ticker, cached)
+
+        logger.info(f"Calculated leadership metrics for {len(results)} tickers")
+        self._progress(f"Calculated leadership metrics for {len(results)} tickers")
+        return results
+
+    def _prioritize_leadership_universe(self, companies: List[Dict[str, Any]], max_companies: Optional[int]) -> List[Dict[str, Any]]:
+        """Limit free price-history downloads to the highest-value universe."""
+        if max_companies is None:
+            prioritized = [company for company in companies if company.get("ticker")]
+            logger.info(f"Selected {len(prioritized)} companies for leadership calculations")
+            return prioritized
+
+        financial_candidates = [
+            company for company in companies
+            if self._passes_non_market_screen(company)
+        ]
+        remaining = [
+            company for company in companies
+            if id(company) not in {id(candidate) for candidate in financial_candidates}
+            and self._has_financial_metrics(company)
+        ]
+        remaining.sort(
+            key=lambda company: sum(
+                float(company.get(field) or 0)
+                for field in ["quarterly_eps_growth", "annual_eps_cagr", "revenue_growth", "roe"]
+                if pd.notna(company.get(field))
+            ),
+            reverse=True,
+        )
+        prioritized = financial_candidates + remaining
+        if max_companies and max_companies > 0:
+            prioritized = prioritized[:max_companies]
+        logger.info(f"Selected {len(prioritized)} companies for leadership calculations")
+        return prioritized
+
+    @staticmethod
+    def _has_financial_metrics(company: Dict[str, Any]) -> bool:
+        fields = [
+            "quarterly_eps_growth",
+            "annual_eps_cagr",
+            "revenue_growth",
+            "profit_margin",
+            "roe",
+            "debt_to_equity",
+        ]
+        return any(pd.notna(company.get(field)) for field in fields)
+
+    def _download_price_history(
+        self,
+        tickers: List[str],
+        period: str,
+        chunk_size: int,
+        cached_only: bool = False,
+    ) -> Dict[str, pd.DataFrame]:
+        """Download OHLCV history in chunks, reusing local cache where possible."""
+        histories = {}
+        missing = []
+        for ticker in tickers:
+            cached = self._load_price_history_cache(ticker)
+            if cached is not None:
+                histories[ticker] = cached
+            else:
+                missing.append(ticker)
+
+        logger.info(f"Loaded cached price history for {len(histories)} tickers; {len(missing)} need download")
+        self._progress(f"Loaded cached price history for {len(histories)} tickers; {len(missing)} need download")
+        if cached_only and histories:
+            self._progress(f"Using cached price history only; skipping {len(missing)} uncached tickers")
+            logger.info("Skipping uncached price history downloads because cached_only=True")
+            return histories
+
+        for start in range(0, len(missing), chunk_size):
+            chunk = missing[start:start + chunk_size]
+            chunk_number = start // chunk_size + 1
+            total_chunks = (len(missing) + chunk_size - 1) // chunk_size
+            self._progress(f"Downloading price history chunk {chunk_number}/{total_chunks} ({len(chunk)} tickers)")
+            try:
+                downloaded = yf.download(
+                    tickers=" ".join(chunk),
+                    period=period,
+                    interval="1d",
+                    auto_adjust=True,
+                    group_by="ticker",
+                    progress=False,
+                    threads=True,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to download price history for chunk {start // chunk_size + 1}: {e}")
+                continue
+
+            if downloaded.empty:
+                continue
+
+            if len(chunk) == 1:
+                history = downloaded.dropna(how="all")
+                histories[chunk[0]] = history
+                self._save_price_history_cache(chunk[0], history)
+                continue
+
+            for ticker in chunk:
+                if ticker in downloaded.columns.get_level_values(0):
+                    ticker_df = downloaded[ticker].dropna(how="all")
+                    if not ticker_df.empty:
+                        histories[ticker] = ticker_df
+                        self._save_price_history_cache(ticker, ticker_df)
+
+        logger.info(f"Available price history for {len(histories)} tickers")
+        self._progress(f"Available price history for {len(histories)} tickers")
+        return histories
+
+    def _download_single_history(self, ticker: str, period: str) -> Optional[pd.DataFrame]:
+        cached = self._load_price_history_cache(ticker)
+        if cached is not None:
+            return cached
+        try:
+            data = yf.download(
+                tickers=ticker,
+                period=period,
+                interval="1d",
+                auto_adjust=True,
+                progress=False,
+                threads=False,
+            )
+            history = data.dropna(how="all") if not data.empty else None
+            if history is not None:
+                self._save_price_history_cache(ticker, history)
+            return history
+        except Exception:
+            return None
+
+    def _price_cache_file(self, ticker: str) -> str:
+        safe_ticker = ticker.replace("/", "-")
+        return os.path.join(self.price_cache_dir, f"{safe_ticker}.csv")
+
+    def _load_price_history_cache(self, ticker: str) -> Optional[pd.DataFrame]:
+        cache_file = self._price_cache_file(ticker)
+        if not os.path.exists(cache_file):
+            return None
+
+        max_age_days = self.config.get("market_data", {}).get("price_cache_max_age_days", 2)
+        try:
+            modified_at = pd.Timestamp(os.path.getmtime(cache_file), unit="s", tz="UTC")
+            age_days = (pd.Timestamp.utcnow() - modified_at).total_seconds() / 86400
+            if max_age_days is not None and age_days > max_age_days:
+                return None
+
+            data = pd.read_csv(cache_file, index_col=0)
+            if data.empty or self._history_series(data, "Close").empty:
+                return None
+            return data.dropna(how="all")
+        except Exception as e:
+            logger.debug(f"Failed to load price cache for {ticker}: {e}")
+            return None
+
+    def _save_price_history_cache(self, ticker: str, history: pd.DataFrame) -> None:
+        if history is None or history.empty:
+            return
+        try:
+            history.to_csv(self._price_cache_file(ticker))
+        except Exception as e:
+            logger.debug(f"Failed to save price cache for {ticker}: {e}")
+
+    def _history_series(self, history: Optional[pd.DataFrame], field: str) -> pd.Series:
+        """Extract one numeric OHLCV series from normal, duplicate, or MultiIndex columns."""
+        if history is None or history.empty:
+            return pd.Series(dtype=float)
+
+        candidates = []
+        if isinstance(history, pd.Series):
+            candidates.append(history)
+        elif isinstance(history.columns, pd.MultiIndex):
+            for level in range(history.columns.nlevels):
+                values = history.columns.get_level_values(level)
+                mask = values == field
+                if mask.any():
+                    candidates.append(history.loc[:, mask])
+        else:
+            if field in history.columns:
+                candidates.append(history.loc[:, field])
+            lower_field = field.lower()
+            for column in history.columns:
+                if str(column).lower() == lower_field and column != field:
+                    candidates.append(history.loc[:, column])
+
+        for candidate in candidates:
+            series = self._first_numeric_series(candidate)
+            if not series.empty:
+                return series
+        return pd.Series(dtype=float)
+
+    @staticmethod
+    def _first_numeric_series(data: Any) -> pd.Series:
+        if isinstance(data, pd.DataFrame):
+            for column_index in range(data.shape[1]):
+                series = MarketDataEnricher._coerce_numeric_history_series(data.iloc[:, column_index])
+                if not series.empty:
+                    return series
+            return pd.Series(dtype=float)
+        return MarketDataEnricher._coerce_numeric_history_series(data)
+
+    @staticmethod
+    def _coerce_numeric_history_series(data: Any) -> pd.Series:
+        series = pd.Series(data).copy()
+        series = pd.to_numeric(series, errors="coerce")
+        index_labels = pd.Index(series.index).astype(str)
+        series = series[~index_labels.isin({"Ticker", "Date", "Price"})]
+        index = pd.to_datetime(series.index, errors="coerce")
+        series.index = index
+        series = series[~series.index.isna()].dropna()
+        if series.empty:
+            return pd.Series(dtype=float)
+        series = series[~series.index.duplicated(keep="last")].sort_index()
+        return series.astype(float)
+
+    def _calculate_single_leadership_metrics(
+        self,
+        history: pd.DataFrame,
+        benchmark_close: Optional[pd.Series],
+    ) -> Dict[str, Any]:
+        if history.empty:
+            return {}
+
+        close = self._history_series(history, "Close")
+        volume = self._history_series(history, "Volume")
+        if len(close) < 60:
+            return {}
+
+        returns = {
+            "price_return_3m": self._return_over_days(close, 63),
+            "price_return_6m": self._return_over_days(close, 126),
+            "price_return_9m": self._return_over_days(close, 189),
+            "price_return_12m": self._return_over_days(close, 252),
+        }
+        rs_score = (
+            0.4 * returns["price_return_3m"]
+            + 0.2 * returns["price_return_6m"]
+            + 0.2 * returns["price_return_9m"]
+            + 0.2 * returns["price_return_12m"]
+        )
+
+        high_52w = close.tail(252).max()
+        price_vs_52w_high = close.iloc[-1] / high_52w if high_52w and high_52w > 0 else np.nan
+        high_20d = close.tail(20).max()
+        base_window = close.tail(65)
+        base_depth = (base_window.max() - base_window.min()) / base_window.max() if len(base_window) >= 30 and base_window.max() > 0 else np.nan
+        base_tightness = float(close.pct_change().tail(15).std()) if len(close) >= 20 else np.nan
+        pivot_window = close.iloc[-55:-5] if len(close) >= 60 else pd.Series(dtype=float)
+        pivot_price = float(pivot_window.max()) if not pivot_window.empty else np.nan
+        breakout_pct = float(close.iloc[-1] / pivot_price - 1) if pd.notna(pivot_price) and pivot_price > 0 else np.nan
+
+        metrics = {
+            **returns,
+            "rs_score": rs_score,
+            "price_vs_52w_high": price_vs_52w_high,
+            "new_52w_high": bool(close.iloc[-1] >= high_52w * 0.995) if pd.notna(high_52w) and high_52w > 0 else False,
+            "new_20d_high": bool(close.iloc[-1] >= high_20d * 0.995) if pd.notna(high_20d) and high_20d > 0 else False,
+            "base_depth_65d": float(base_depth) if pd.notna(base_depth) else np.nan,
+            "base_tightness_3w": base_tightness,
+            "pivot_price": pivot_price,
+            "breakout_pct": breakout_pct,
+            "near_pivot": bool(-0.05 <= breakout_pct <= 0.05) if pd.notna(breakout_pct) else False,
+        }
+
+        if benchmark_close is not None and len(benchmark_close.dropna()) >= 60:
+            aligned = pd.concat([close, benchmark_close.dropna()], axis=1, join="inner").dropna()
+            if len(aligned) >= 60:
+                aligned.columns = ["stock", "benchmark"]
+                rs_line = aligned["stock"] / aligned["benchmark"]
+                rs_line_high = rs_line.tail(252).max()
+                metrics["rs_line_near_high"] = bool(rs_line.iloc[-1] >= rs_line_high * self.config.get("leadership_criteria", {}).get("rs_line_high_threshold", 0.95))
+                metrics["market_outperformance_12m"] = self._return_over_days(aligned["stock"], 252) - self._return_over_days(aligned["benchmark"], 252)
+
+        if not volume.empty:
+            price_volume = pd.concat([close, volume], axis=1, join="inner").dropna()
+            price_volume.columns = ["close", "volume"]
+            dollar_volume = price_volume["close"] * price_volume["volume"]
+            if len(dollar_volume) >= 50:
+                metrics["avg_dollar_volume_50d"] = float(dollar_volume.tail(50).mean())
+            if len(price_volume) >= 200:
+                avg_200 = price_volume["volume"].tail(200).mean()
+                metrics["volume_trend_50_200"] = float(price_volume["volume"].tail(50).mean() / avg_200) if avg_200 else np.nan
+            if len(price_volume) >= 50:
+                recent = price_volume.tail(50).copy()
+                recent["price_change"] = recent["close"].diff()
+                up_volume = recent.loc[recent["price_change"] > 0, "volume"].sum()
+                down_volume = recent.loc[recent["price_change"] < 0, "volume"].sum()
+                metrics["up_down_volume_ratio_50d"] = float(up_volume / down_volume) if down_volume > 0 else np.nan
+                avg_50 = recent["volume"].mean()
+                metrics["volume_dry_up_ratio_10_50"] = float(price_volume["volume"].tail(10).mean() / avg_50) if avg_50 else np.nan
+                metrics["breakout_volume_ratio"] = float(price_volume["volume"].iloc[-1] / avg_50) if avg_50 else np.nan
+                metrics["valid_breakout"] = bool(
+                    pd.notna(metrics.get("breakout_pct"))
+                    and 0 <= metrics["breakout_pct"] <= 0.05
+                    and metrics["breakout_volume_ratio"] >= self.config.get("pattern_criteria", {}).get("breakout_volume_ratio_min", 1.4)
+                )
+            else:
+                metrics["valid_breakout"] = False
+
+        return metrics
+
+    def _save_market_direction(self, benchmark_history: Optional[pd.DataFrame], market_data_config: Dict[str, Any]) -> None:
+        """Persist a simple CAN SLIM M proxy from index trend and distribution days."""
+        if benchmark_history is None or benchmark_history.empty:
+            return
+
+        close = self._history_series(benchmark_history, "Close")
+        volume = self._history_series(benchmark_history, "Volume")
+        if len(close) < 200:
+            return
+
+        sma50 = close.rolling(50).mean()
+        sma200 = close.rolling(200).mean()
+        close_above_50 = bool(float(close.iloc[-1]) > float(sma50.iloc[-1]))
+        sma50_above_200 = bool(float(sma50.iloc[-1]) > float(sma200.iloc[-1]))
+        market_return_21d = self._return_over_days(close, 21)
+        distribution_days = self._distribution_days(close, volume, lookback=25)
+
+        if close_above_50 and sma50_above_200 and distribution_days <= 4 and market_return_21d > 0:
+            status = "confirmed_uptrend"
+        elif close_above_50 and distribution_days <= 6:
+            status = "uptrend_under_pressure"
+        else:
+            status = "correction"
+
+        output = {
+            "benchmark": market_data_config.get("leadership_benchmark", "SPY"),
+            "as_of": pd.Timestamp.utcnow().date().isoformat(),
+            "market_direction_status": status,
+            "close_above_50dma": close_above_50,
+            "sma50_above_sma200": sma50_above_200,
+            "market_return_21d": market_return_21d,
+            "distribution_days_25d": distribution_days,
+            "latest_close": float(close.iloc[-1]),
+            "sma50": float(sma50.iloc[-1]),
+            "sma200": float(sma200.iloc[-1]),
+        }
+        output_file = os.path.join(self.processed_dir, "market_direction.json")
+        try:
+            with open(output_file, "w") as f:
+                json.dump(output, f, indent=2)
+            logger.info(f"Saved market direction data to {output_file}: {status}")
+        except Exception as e:
+            logger.warning(f"Failed to save market direction data: {e}")
+
+    @staticmethod
+    def _distribution_days(close: pd.Series, volume: pd.Series, lookback: int = 25) -> int:
+        if volume.empty:
+            return 0
+        aligned = pd.concat([close, volume], axis=1, join="inner").dropna()
+        aligned.columns = ["close", "volume"]
+        if len(aligned) < 2:
+            return 0
+        recent = aligned.tail(lookback + 1).copy()
+        recent["price_change"] = recent["close"].pct_change()
+        recent["volume_change"] = recent["volume"].diff()
+        distribution = (recent["price_change"] <= -0.002) & (recent["volume_change"] > 0)
+        return int(distribution.tail(lookback).sum())
+
+    @staticmethod
+    def _return_over_days(close: pd.Series, days: int) -> float:
+        if len(close) <= days:
+            first = close.iloc[0]
+        else:
+            first = close.iloc[-days - 1]
+        last = close.iloc[-1]
+        if not first or first <= 0:
+            return np.nan
+        return float(last / first - 1)
+
+    @staticmethod
+    def _industry_group_for_company(company: Dict[str, Any]) -> str:
+        return (
+            str(company.get("industry") or "").strip()
+            or str(company.get("sector") or "").strip()
+            or str(company.get("sic") or "").strip()
+            or str(company.get("category") or "").strip()
+        )
+
+    @staticmethod
+    def _add_percentile_ranks(results: Dict[str, Dict[str, Any]], source_field: str, target_field: str, scale: int = 100) -> None:
+        values = pd.Series({
+            ticker: metrics.get(source_field)
+            for ticker, metrics in results.items()
+            if pd.notna(metrics.get(source_field))
+        })
+        if values.empty:
+            return
+        ranks = values.rank(pct=True) * scale
+        for ticker, rank in ranks.items():
+            results[ticker][target_field] = float(rank)
+
+    def _add_industry_ranks(self, results: Dict[str, Dict[str, Any]]) -> None:
+        rows = [
+            {"ticker": ticker, "industry_group": metrics.get("industry_group"), "rs_score": metrics.get("rs_score")}
+            for ticker, metrics in results.items()
+            if metrics.get("industry_group") and pd.notna(metrics.get("rs_score"))
+        ]
+        if not rows:
+            return
+
+        df = pd.DataFrame(rows)
+        industry_scores = df.groupby("industry_group")["rs_score"].mean()
+        industry_ranks = industry_scores.rank(pct=True) * 100
+        stock_ranks = df.groupby("industry_group")["rs_score"].rank(pct=True) * 100
+        df["industry_stock_rank"] = stock_ranks
+
+        for _, row in df.iterrows():
+            ticker = row["ticker"]
+            group = row["industry_group"]
+            results[ticker]["industry_rs_rank"] = float(industry_ranks[group])
+            results[ticker]["industry_stock_rank"] = float(row["industry_stock_rank"])
+
+    def _fetch_single_yfinance_ticker(self, ticker: str) -> Dict[str, Any]:
+        """Fetch one ticker with fast_info first, then fall back to info."""
+        yf_ticker = yf.Ticker(ticker)
+        data = {"ticker": ticker, "market_cap_source": "yfinance", "data_date": pd.Timestamp.utcnow().date().isoformat()}
+
+        fast_info = getattr(yf_ticker, "fast_info", None)
+        if fast_info:
+            market_cap = self._safe_fast_info_get(fast_info, "market_cap")
+            current_price = self._safe_fast_info_get(fast_info, "last_price")
+            shares = self._safe_fast_info_get(fast_info, "shares")
+            if market_cap:
+                data["market_cap"] = int(market_cap)
+            if current_price:
+                data["current_price"] = float(current_price)
+            if shares:
+                data["shares_outstanding"] = int(shares)
+
+        use_info_fallback = self.config.get("market_data", {}).get("use_yfinance_info_fallback", False)
+        if use_info_fallback:
+            info = yf_ticker.get_info()
+            market_cap = info.get("marketCap")
+            current_price = info.get("currentPrice") or info.get("regularMarketPrice")
+            shares = info.get("sharesOutstanding") or info.get("impliedSharesOutstanding")
+            if market_cap and "market_cap" not in data:
+                data["market_cap"] = int(market_cap)
+            if current_price and "current_price" not in data:
+                data["current_price"] = float(current_price)
+            if shares and "shares_outstanding" not in data:
+                data["shares_outstanding"] = int(shares)
+            for source, target in [
+                ("sector", "sector"),
+                ("industry", "industry"),
+                ("heldPercentInstitutions", "institutional_ownership"),
+                ("numberOfInstitutionalHolders", "institutional_holders"),
+            ]:
+                value = info.get(source)
+                if value is not None:
+                    data[target] = value
+            if "institutional_ownership" in data or "institutional_holders" in data:
+                data["institutional_data_source"] = "yfinance_info"
+
+        return data if len(data) > 3 else {}
+
+    @staticmethod
+    def _safe_fast_info_get(fast_info: Any, key: str) -> Optional[float]:
+        try:
+            if hasattr(fast_info, "get"):
+                return fast_info.get(key)
+            return fast_info[key]
+        except Exception:
+            return None
+
+    def _save_market_data_file(self, ticker: str, data: Dict[str, Any]) -> None:
+        safe_ticker = ticker.replace("/", "-")
+        output_file = os.path.join(self.market_data_dir, f"{safe_ticker}_market.json")
+        with open(output_file, "w") as f:
+            json.dump(data, f, indent=2)
+    
+    def _load_market_data_files(self, market_data_dir: str) -> Dict[str, Dict]:
+        """
+        Load market data files from directory
+        
+        Args:
+            market_data_dir: Directory containing market data files
+            
+        Returns:
+            Dictionary mapping tickers to market data
+        """
+        market_data = {}
+        
+        # Get all market data files
+        market_files = os.listdir(market_data_dir)
+        market_files = [f for f in market_files if f.endswith('_market.json')]
+        
+        for file_name in market_files:
+            try:
+                file_path = os.path.join(market_data_dir, file_name)
+                with open(file_path, 'r') as f:
+                    data = json.load(f)
+                
+                ticker = self._normalize_yahoo_ticker(data.get("ticker"))
+                if ticker:
+                    market_data[ticker] = data
+                    
+            except Exception as e:
+                logger.warning(f"Error loading market data file {file_name}: {e}")
+        
+        logger.info(f"Loaded market data for {len(market_data)} companies")
+        return market_data
+
+    def enrich_company_data(self, companies_df, max_companies=100):
+        """
+        Add market data to company financial data
+        
+        Args:
+            companies_df: DataFrame with company financial metrics
+            max_companies: Maximum number of companies to process
+        
+        Returns:
+            DataFrame with added market data
+        """
+        # Filter to companies with tickers
+        df = companies_df.copy()
+        has_ticker = df['ticker'].notna() & (df['ticker'] != '')
+        df_with_tickers = df[has_ticker].copy()
+        
+        if len(df_with_tickers) > max_companies:
+            logger.warning(f"Limiting market data enrichment to {max_companies} companies")
+            df_with_tickers = df_with_tickers.head(max_companies)
+        
+        # Load market data from files
+        market_data_dir = os.path.join(self.financial_data_dir, "market_data")
+        market_data_dict = self._load_market_data_files(market_data_dir)
+        
+        if market_data_dict:
+            # Convert market data to DataFrame
+            market_data_df = pd.DataFrame.from_dict(market_data_dict, orient='index')
+            
+            # Merge with company data if market data exists
+            if not market_data_df.empty:
+                df_with_tickers = df_with_tickers.set_index('ticker')
+                
+                # Add market data columns
+                for col in ['market_cap', 'book_value', 'ttm_revenue', 'ttm_net_income', 'price_to_sales']:
+                    if col in market_data_df.columns:
+                        df_with_tickers[col] = market_data_df[col]
+                
+                df_with_tickers = df_with_tickers.reset_index()
+        
+        # For companies without market data, estimate market cap from financial data
+        missing_market_cap = df_with_tickers['market_cap'].isna() | (df_with_tickers['market_cap'] == 0)
+        if 'equity' in df_with_tickers.columns:
+            df_with_tickers.loc[missing_market_cap, 'market_cap'] = df_with_tickers.loc[missing_market_cap, 'equity'] * 1.5
+            df_with_tickers.loc[missing_market_cap, 'market_cap_source'] = 'estimated_from_equity'
+        
+        # Combine enriched data with original data
+        result = pd.merge(
+            df, df_with_tickers, 
+            how='left', 
+            on=df.columns.tolist(),
+            suffixes=('', '_y')
+        )
+        
+        # Drop duplicate columns
+        result = result.loc[:, ~result.columns.str.endswith('_y')]
+        
+        return result
+
+def enrich_market_data(config, use_external_api: bool = False):
+    """
+    Standalone function to enrich company data with market information.
+    
+    Args:
+        config: Application configuration
+        use_external_api: Whether to use external API for market data (ignored, using SEC data only)
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        enricher = MarketDataEnricher(config)
+        company_limit = config.get("download_settings", {}).get("company_limit", 100)
+        print("[enrich] Starting market data enrichment", flush=True)
+        
+        # SEC 데이터만 사용
+        enriched_companies = enricher.enrich_companies_with_market_data(company_limit)
+        
+        # Replace original file with enriched file
+        if enriched_companies:
+            processed_dir = config.get("data_paths", {}).get("processed_data_dir", "data/processed")
+            companies_list_file = os.path.join(processed_dir, "companies_list.json")
+            enriched_file = os.path.join(processed_dir, "companies_list_enriched.json")
+            
+            # Back up original file
+            backup_file = os.path.join(processed_dir, "companies_list_backup.json")
+            if os.path.exists(companies_list_file):
+                import shutil
+                shutil.copy2(companies_list_file, backup_file)
+                logger.info(f"Backed up original companies list to {backup_file}")
+                
+            # Replace with enriched file if it exists
+            if os.path.exists(enriched_file):
+                with open(enriched_file, 'r') as f:
+                    enriched_data = json.load(f)
+                    
+                with open(companies_list_file, 'w') as f:
+                    json.dump(enriched_data, f, indent=2)
+                    
+                logger.info(f"Updated companies list file with enriched data")
+                print("[enrich] Updated companies_list.json with enriched data", flush=True)
+                
+        print("[enrich] Done", flush=True)
+        return True
+    except Exception as e:
+        logger.error(f"Error during market data enrichment: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+def enrich_leadership_data(config):
+    """Run only price-based leadership enrichment."""
+    try:
+        print("[leadership] Starting price/RS/volume enrichment", flush=True)
+        enricher = MarketDataEnricher(config)
+        enricher.enrich_companies_with_leadership_data()
+        print("[leadership] Done", flush=True)
+        return True
+    except Exception as e:
+        logger.error(f"Error during leadership enrichment: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
