@@ -11,7 +11,7 @@ import numpy as np
 from typing import Dict, List, Any, Optional, Union
 from pathlib import Path
 
-from utils.logger import setup_logger
+from src.utils.logger import setup_logger
 
 # Set up logger
 logger = setup_logger("results_formatter")

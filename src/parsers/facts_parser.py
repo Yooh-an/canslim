@@ -7,7 +7,6 @@ Module for parsing SEC XBRL company facts data and extracting financial metrics.
 import os
 import json
 import glob
-import re
 from pathlib import Path
 from datetime import datetime
 import pandas as pd
@@ -15,12 +14,17 @@ import numpy as np
 import traceback
 from typing import Dict, List, Any, Optional, Tuple, Set, Union
 
-# Import logger from src.utils instead of utils
-try:
-    from src.utils.logger import setup_logger
-except ImportError:
-    # Fallback import for when running from the module directly
-    from utils.logger import setup_logger
+from src.utils.logger import setup_logger
+from src.parsers.fact_utils import (
+    frame_period,
+    item_end_date,
+    normalized_form,
+    period_start_date,
+    period_year,
+    quarter_from_end_date,
+    quarter_number,
+    safe_float,
+)
 
 # Set up logger
 logger = setup_logger("facts_parser")
@@ -125,91 +129,6 @@ class XBRLFactsParser:
             logger.error(f"Error loading company facts from {file_path}: {e}")
             return {}
 
-    @staticmethod
-    def _item_end_date(item: Dict[str, Any]) -> Optional[str]:
-        """Return the SEC fact end date across old and current JSON shapes."""
-        if item.get('end'):
-            return item.get('end')
-        period = item.get('period', {})
-        if isinstance(period, dict):
-            return period.get('endDate')
-        return None
-
-    @staticmethod
-    def _normalized_form(item: Dict[str, Any]) -> Optional[str]:
-        """Normalize amended SEC forms to their base form."""
-        form = item.get('form')
-        if form in {'10-Q', '10-Q/A'}:
-            return '10-Q'
-        if form in {'10-K', '10-K/A'}:
-            return '10-K'
-        return None
-
-    @staticmethod
-    def _period_start_date(item: Dict[str, Any]) -> Optional[str]:
-        if item.get('start'):
-            return item.get('start')
-        period = item.get('period', {})
-        if isinstance(period, dict):
-            return period.get('startDate')
-        return None
-
-    @staticmethod
-    def _quarter_number(fp: Optional[str]) -> Optional[int]:
-        if not fp:
-            return None
-        fp = str(fp).upper()
-        if fp.startswith('Q') and fp[1:].isdigit():
-            quarter = int(fp[1:])
-            if 1 <= quarter <= 4:
-                return quarter
-        return None
-
-    @staticmethod
-    def _frame_period(frame: Optional[str]) -> Tuple[Optional[int], Optional[int]]:
-        """Extract calendar year/quarter from SEC frame labels like CY2025Q1."""
-        if not frame:
-            return None, None
-        match = re.search(r'CY(\d{4})(?:Q([1-4]))?', str(frame).upper())
-        if not match:
-            return None, None
-        year = int(match.group(1))
-        quarter = int(match.group(2)) if match.group(2) else None
-        return year, quarter
-
-    @staticmethod
-    def _period_year(record: Dict[str, Any]) -> Optional[int]:
-        """
-        Return the year represented by a fact's period.
-
-        SEC companyfacts can repeat historical facts in a newer filing, so item['fy']
-        may describe the filing context rather than the historical period. Prefer
-        frame/end-date to avoid assigning old facts to the latest fiscal year.
-        """
-        frame_year, _ = XBRLFactsParser._frame_period(record.get('frame'))
-        if frame_year:
-            return frame_year
-        end_date = record.get('end')
-        if end_date:
-            try:
-                return int(pd.Timestamp(end_date).year)
-            except Exception:
-                pass
-        try:
-            return int(record.get('fy'))
-        except (ValueError, TypeError):
-            return None
-
-    @staticmethod
-    def _safe_float(value: Any) -> Optional[float]:
-        try:
-            parsed = float(value)
-            if pd.notna(parsed):
-                return parsed
-        except (ValueError, TypeError):
-            return None
-        return None
-
     def _select_unit_values(self, concept_data: Dict[str, Any], unit_types: List[str]) -> List[Dict[str, Any]]:
         units = concept_data.get('units', {})
         for unit_type in unit_types:
@@ -221,13 +140,13 @@ class XBRLFactsParser:
     def _fact_records(self, concept_data: Dict[str, Any], unit_types: List[str]) -> List[Dict[str, Any]]:
         records = []
         for item in self._select_unit_values(concept_data, unit_types):
-            form = self._normalized_form(item)
-            end_date = self._item_end_date(item)
-            value = self._safe_float(item.get('val'))
+            form = normalized_form(item)
+            end_date = item_end_date(item)
+            value = safe_float(item.get('val'))
             if not form or not end_date or value is None:
                 continue
 
-            start_date = self._period_start_date(item)
+            start_date = period_start_date(item)
             days = None
             if start_date:
                 try:
@@ -262,12 +181,16 @@ class XBRLFactsParser:
         annual_by_fy: Dict[int, Dict[str, Any]] = {}
 
         for record in records:
-            fy = self._period_year(record)
+            fy = period_year(record)
             if fy is None:
                 continue
 
-            _, frame_quarter = self._frame_period(record.get('frame'))
-            quarter = frame_quarter or self._quarter_number(record.get('fp'))
+            _, frame_quarter = frame_period(record.get('frame'))
+            quarter = (
+                frame_quarter
+                or quarter_number(record.get('fp'))
+                or quarter_from_end_date(record.get('end'))
+            )
             frame = str(record.get('frame') or '').upper()
             days = record.get('days')
             key = (fy, quarter) if quarter else None
@@ -337,7 +260,7 @@ class XBRLFactsParser:
         for record in self._fact_records(concept_data, unit_types):
             if record['form'] != '10-K':
                 continue
-            fy = self._period_year(record)
+            fy = period_year(record)
             if fy is None:
                 continue
             days = record.get('days')
@@ -403,9 +326,9 @@ class XBRLFactsParser:
             units = concept_data.get('units', {})
             for unit_values in units.values():
                 for item in unit_values:
-                    if not self._normalized_form(item):
+                    if not normalized_form(item):
                         continue
-                    end_date = self._item_end_date(item)
+                    end_date = item_end_date(item)
                     if not end_date:
                         continue
                     try:
@@ -467,8 +390,8 @@ class XBRLFactsParser:
         # 실제 값은 10-Q와 10-K 모두에서 추출 가능
         for item in unit_values:
             # 기간이 지정되어 있는지 확인
-            end_date = self._item_end_date(item)
-            form = self._normalized_form(item)
+            end_date = item_end_date(item)
+            form = normalized_form(item)
             if not end_date or not form:
                 continue
 
@@ -760,9 +683,9 @@ class XBRLFactsParser:
             if 'USD' in tag_data.get('units', {}):
                 values = []
                 for item in tag_data['units']['USD']:
-                    if self._normalized_form(item) == '10-K':
+                    if normalized_form(item) == '10-K':
                         try:
-                            end_date = self._item_end_date(item)
+                            end_date = item_end_date(item)
                             if not end_date:
                                 continue
                             val = float(item['val'])
@@ -782,9 +705,9 @@ class XBRLFactsParser:
             if 'USD' in tag_data.get('units', {}):
                 values = []
                 for item in tag_data['units']['USD']:
-                    if self._normalized_form(item) == '10-K':
+                    if normalized_form(item) == '10-K':
                         try:
-                            end_date = self._item_end_date(item)
+                            end_date = item_end_date(item)
                             if not end_date:
                                 continue
                             val = float(item['val'])
@@ -806,9 +729,9 @@ class XBRLFactsParser:
                 if 'USD' in tag_data.get('units', {}):
                     values = []
                     for item in tag_data['units']['USD']:
-                        if self._normalized_form(item) == '10-K':
+                        if normalized_form(item) == '10-K':
                             try:
-                                end_date = self._item_end_date(item)
+                                end_date = item_end_date(item)
                                 if not end_date:
                                     continue
                                 val = float(item['val'])

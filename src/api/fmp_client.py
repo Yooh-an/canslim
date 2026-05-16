@@ -11,7 +11,7 @@ import requests
 import pandas as pd
 from typing import Dict, List, Any, Optional, Union
 
-from utils.logger import setup_logger
+from src.utils.logger import setup_logger
 
 # Set up logger
 logger = setup_logger("fmp_api_client")

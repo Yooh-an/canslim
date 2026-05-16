@@ -115,6 +115,10 @@ class SubmissionsParser:
         
         return df
     
+    def process_submissions(self, force: bool = False) -> pd.DataFrame:
+        """Backward-compatible alias for creating the company index."""
+        return self.create_company_index(force=force)
+
     def get_tickers_list(self) -> List[str]:
         """
         Get a list of all ticker symbols in the index.

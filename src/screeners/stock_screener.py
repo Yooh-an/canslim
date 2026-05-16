@@ -1,145 +1,167 @@
 """
 Stock Screener Module
 
-This module provides functionality for screening stocks based on various criteria.
+This module provides functionality for screening stocks based on financial and
+basic market criteria.
 """
 
+from __future__ import annotations
+
 import os
+from typing import Any, Dict, Iterable, Optional
+
 import pandas as pd
-import numpy as np
-from typing import Dict, List, Any, Optional, Tuple, Set, Union
-from datetime import datetime, timedelta
 
-from utils.logger import setup_logger
+from src.utils.logger import setup_logger
 
-# Set up logger
 logger = setup_logger("stock_screener")
 
+
+_COLUMN_ALIASES = {
+    "quarterly_eps_growth": ("quarterly_eps_growth", "eps_qtr_growth"),
+    "annual_eps_cagr": ("annual_eps_cagr", "eps_3yr_cagr"),
+    "revenue_growth": ("revenue_growth", "revenue_qtr_growth"),
+    "profit_margin": ("profit_margin",),
+    "roe": ("roe",),
+    "debt_to_equity": ("debt_to_equity",),
+    "market_cap": ("market_cap",),
+    "sp500_outperformance": ("sp500_outperformance", "market_outperformance"),
+}
+
+
 class StockScreener:
-    """Screens stocks based on financial criteria."""
-    
-    def __init__(self, config):
+    """Screens stocks based on configured criteria."""
+
+    def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.criteria = config.get('screening_criteria', {})
-        
-    def screen_stocks(self, company_data):
+        self.criteria = config.get("screening_criteria", {})
+        self.metrics_df = pd.DataFrame()
+        self.companies_df = pd.DataFrame()
+        self._load_data()
+
+    def _processed_path(self, filename: str) -> str:
+        processed_dir = self.config.get("data_paths", {}).get(
+            "processed_data_dir", "data/processed"
+        )
+        return os.path.join(processed_dir, filename)
+
+    def _load_data(self) -> None:
+        """Load persisted metrics and company index when available."""
+        metrics_file = self._processed_path("financial_metrics.parquet")
+        companies_file = self._processed_path("companies_index.parquet")
+
+        if os.path.exists(metrics_file):
+            self.metrics_df = pd.read_parquet(metrics_file)
+        if os.path.exists(companies_file):
+            self.companies_df = pd.read_parquet(companies_file)
+
+        if not self.metrics_df.empty and not self.companies_df.empty:
+            company_columns = [
+                column
+                for column in ["ticker", "market_cap", "exchange", "name", "sic", "category"]
+                if column in self.companies_df.columns
+            ]
+            if "ticker" in company_columns:
+                company_lookup = self.companies_df[company_columns].drop_duplicates("ticker")
+                merge_columns = [c for c in company_lookup.columns if c != "ticker"]
+                self.metrics_df = self.metrics_df.merge(
+                    company_lookup[["ticker", *merge_columns]],
+                    on="ticker",
+                    how="left",
+                    suffixes=("", "_company"),
+                )
+                for column in merge_columns:
+                    company_column = f"{column}_company"
+                    if company_column in self.metrics_df.columns:
+                        if column in self.metrics_df.columns:
+                            self.metrics_df[column] = self.metrics_df[column].fillna(
+                                self.metrics_df[company_column]
+                            )
+                            self.metrics_df = self.metrics_df.drop(columns=[company_column])
+                        else:
+                            self.metrics_df = self.metrics_df.rename(
+                                columns={company_column: column}
+                            )
+
+    @staticmethod
+    def _first_existing_column(df: pd.DataFrame, names: Iterable[str]) -> Optional[str]:
+        for name in names:
+            if name in df.columns:
+                return name
+        return None
+
+    def _metric_column(self, metric: str, df: pd.DataFrame) -> Optional[str]:
+        return self._first_existing_column(df, _COLUMN_ALIASES.get(metric, (metric,)))
+
+    def _apply_min_filter(self, df: pd.DataFrame, metric: str, threshold: Any) -> pd.DataFrame:
+        column = self._metric_column(metric, df)
+        if column is None or threshold is None:
+            return df.copy()
+        return df[df[column].ge(threshold).fillna(False)].copy()
+
+    def _apply_max_filter(self, df: pd.DataFrame, metric: str, threshold: Any) -> pd.DataFrame:
+        column = self._metric_column(metric, df)
+        if column is None or threshold is None:
+            return df.copy()
+        return df[df[column].le(threshold).fillna(False)].copy()
+
+    def apply_eps_filter(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Apply quarterly EPS growth threshold."""
+        return self._apply_min_filter(
+            df, "quarterly_eps_growth", self.criteria.get("quarterly_eps_growth")
+        )
+
+    def apply_revenue_filter(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Apply revenue growth threshold."""
+        return self._apply_min_filter(
+            df, "revenue_growth", self.criteria.get("revenue_growth")
+        )
+
+    def apply_all_filters(self, df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+        """Apply all configured financial and basic market filters."""
+        filtered = (self.metrics_df if df is None else df).copy()
+
+        if "has_complete_data" in filtered.columns:
+            filtered = filtered[filtered["has_complete_data"].fillna(False)].copy()
+
+        filtered = self.apply_eps_filter(filtered)
+        filtered = self._apply_min_filter(
+            filtered, "annual_eps_cagr", self.criteria.get("annual_eps_cagr")
+        )
+        filtered = self.apply_revenue_filter(filtered)
+        filtered = self._apply_min_filter(
+            filtered, "profit_margin", self.criteria.get("profit_margin")
+        )
+        filtered = self._apply_min_filter(filtered, "roe", self.criteria.get("roe"))
+        filtered = self._apply_max_filter(
+            filtered, "debt_to_equity", self.criteria.get("debt_to_equity")
+        )
+        filtered = self._apply_min_filter(
+            filtered, "market_cap", self.criteria.get("min_market_cap")
+        )
+
+        if self.criteria.get("outperform_sp500", False):
+            outperformance_column = self._metric_column("sp500_outperformance", filtered)
+            if outperformance_column:
+                filtered = filtered[filtered[outperformance_column].gt(0).fillna(False)].copy()
+
+        return filtered
+
+    def screen_stocks(self, company_data: pd.DataFrame) -> pd.DataFrame:
         """
-        Apply screening criteria to company data
-        
+        Apply screening criteria to company data.
+
         Args:
             company_data: DataFrame with company financial and market data
-            
+
         Returns:
             DataFrame with companies that pass all criteria
         """
         logger.info(f"Screening {len(company_data)} companies")
-        
-        # Make a copy to avoid modifying original
-        df = company_data.copy()
-        
-        # Initial count
-        initial_count = len(df)
-        
-        # Apply financial criteria
-        filtered_df = self._apply_financial_criteria(df)
-        
-        # Apply market criteria if possible
-        if 'market_cap' in filtered_df.columns:
-            filtered_df = self._apply_market_criteria(filtered_df)
-        
-        # Final count
-        final_count = len(filtered_df)
-        
-        logger.info(f"Screening complete: {final_count} companies passed out of {initial_count}")
-        
+        filtered_df = self.apply_all_filters(company_data)
+        logger.info(
+            "Screening complete: %s companies passed out of %s",
+            len(filtered_df),
+            len(company_data),
+        )
         return filtered_df
-        
-    def _apply_financial_criteria(self, df):
-        """Apply financial metrics criteria."""
-        # Start with all companies
-        mask = pd.Series(True, index=df.index)
-        
-        # Apply each criterion if it exists in both data and criteria
-        criteria_values = self.criteria
-        
-        # EPS Growth
-        if 'quarterly_eps_growth' in df.columns and 'quarterly_eps_growth' in criteria_values:
-            threshold = criteria_values['quarterly_eps_growth']
-            eps_mask = df['quarterly_eps_growth'] >= threshold
-            # Handle NaN values
-            eps_mask = eps_mask.fillna(False)
-            mask = mask & eps_mask
-            logger.info(f"After EPS growth filter: {mask.sum()} companies")
-        
-        # Annual EPS CAGR
-        if 'annual_eps_cagr' in df.columns and 'annual_eps_cagr' in criteria_values:
-            threshold = criteria_values['annual_eps_cagr']
-            cagr_mask = df['annual_eps_cagr'] >= threshold
-            cagr_mask = cagr_mask.fillna(False)
-            mask = mask & cagr_mask
-            logger.info(f"After annual EPS CAGR filter: {mask.sum()} companies")
-        
-        # Revenue Growth
-        if 'revenue_growth' in df.columns and 'revenue_growth' in criteria_values:
-            threshold = criteria_values['revenue_growth']
-            rev_mask = df['revenue_growth'] >= threshold
-            rev_mask = rev_mask.fillna(False)
-            mask = mask & rev_mask
-            logger.info(f"After revenue growth filter: {mask.sum()} companies")
-        
-        # Profit Margin
-        if 'profit_margin' in df.columns and 'profit_margin' in criteria_values:
-            threshold = criteria_values['profit_margin']
-            pm_mask = df['profit_margin'] >= threshold
-            pm_mask = pm_mask.fillna(False)
-            mask = mask & pm_mask
-            logger.info(f"After profit margin filter: {mask.sum()} companies")
-        
-        # ROE
-        if 'roe' in df.columns and 'roe' in criteria_values:
-            threshold = criteria_values['roe']
-            roe_mask = df['roe'] >= threshold
-            roe_mask = roe_mask.fillna(False)
-            mask = mask & roe_mask
-            logger.info(f"After ROE filter: {mask.sum()} companies")
-        
-        # Debt-to-Equity
-        if 'debt_to_equity' in df.columns and 'debt_to_equity' in criteria_values:
-            threshold = criteria_values['debt_to_equity']
-            # For D/E, we want it to be BELOW the threshold
-            dte_mask = df['debt_to_equity'] <= threshold
-            dte_mask = dte_mask.fillna(False)
-            mask = mask & dte_mask
-            logger.info(f"After debt-to-equity filter: {mask.sum()} companies")
-        
-        # Apply the combined filter
-        return df[mask].copy()
-    
-    def _apply_market_criteria(self, df):
-        """Apply market-based criteria."""
-        # Start with all companies
-        mask = pd.Series(True, index=df.index)
-        
-        # S&P 500 outperformance
-        if ('sp500_outperformance' in df.columns and 
-            'outperform_sp500' in self.criteria and 
-            self.criteria['outperform_sp500']):
-            
-            outperf_mask = df['sp500_outperformance'] > 0
-            outperf_mask = outperf_mask.fillna(False)
-            mask = mask & outperf_mask
-            logger.info(f"After S&P 500 outperformance filter: {mask.sum()} companies")
-        
-        # Minimum market cap
-        if ('market_cap' in df.columns and 
-            'min_market_cap' in self.criteria and 
-            self.criteria['min_market_cap'] > 0):
-            
-            min_cap = self.criteria['min_market_cap']
-            cap_mask = df['market_cap'] >= min_cap
-            cap_mask = cap_mask.fillna(False)
-            mask = mask & cap_mask
-            logger.info(f"After market cap filter: {mask.sum()} companies")
-        
-        # Apply the combined filter
-        return df[mask].copy()

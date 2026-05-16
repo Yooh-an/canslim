@@ -12,7 +12,7 @@ import yfinance as yf
 from typing import Dict, List, Any, Optional, Union
 from datetime import datetime, timedelta
 
-from utils.logger import setup_logger
+from src.utils.logger import setup_logger
 
 # Set up logger
 logger = setup_logger("price_screener")
@@ -169,7 +169,9 @@ class PriceScreener:
             logger.error("DataFrame must contain a 'ticker' column")
             return df
         
-        tickers = df['ticker'].unique().tolist()
+        result_base = df.copy()
+        result_base['ticker'] = result_base['ticker'].astype(str).str.lower()
+        tickers = result_base['ticker'].unique().tolist()
         
         # Get market performance
         market_performance = self.get_market_performance()
@@ -183,8 +185,8 @@ class PriceScreener:
         # Calculate market outperformance
         price_df['market_outperformance'] = price_df['price_performance'] - market_performance
         
-        # Merge with original DataFrame
-        result_df = df.merge(price_df, on='ticker', how='left')
+        # Merge with original DataFrame using normalized ticker symbols
+        result_df = result_base.merge(price_df, on='ticker', how='left')
         
         logger.info(f"Added price performance data to {len(result_df)} companies")
         return result_df

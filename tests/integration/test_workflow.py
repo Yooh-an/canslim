@@ -172,8 +172,8 @@ class TestEndToEndWorkflow(unittest.TestCase):
         current_net_income = current_revenue * profit_margin
         
         # Create sample balance sheet data
-        equity = 500000000
-        liabilities = 300000000 if high_growth else 800000000  # Lower debt-to-equity for high growth
+        equity = 100000000 if high_growth else 500000000
+        liabilities = 50000000 if high_growth else 800000000  # Lower debt-to-equity for high growth
         
         # Create company facts structure
         facts_data = {

@@ -146,7 +146,7 @@ class TestStockScreener(unittest.TestCase):
         filtered_df = screener.apply_eps_filter(screener.metrics_df)
         
         # Should have kept only companies with eps_qtr_growth >= 0.25
-        self.assertEqual(len(filtered_df), 3)  # aapl, googl
+        self.assertEqual(len(filtered_df), 2)  # aapl, googl
         self.assertTrue(all(filtered_df['eps_qtr_growth'] >= 0.25))
     
     def test_apply_revenue_filter(self):

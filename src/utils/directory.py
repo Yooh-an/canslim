@@ -4,7 +4,7 @@ Directory utility functions.
 
 import os
 from pathlib import Path
-from utils.logger import setup_logger
+from src.utils.logger import setup_logger
 
 logger = setup_logger("directory_utils")
 

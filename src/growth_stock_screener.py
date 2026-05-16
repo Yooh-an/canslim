@@ -14,10 +14,6 @@ import pandas as pd
 from pathlib import Path
 from typing import Any, Dict
 
-# 프로젝트 루트 경로를 Python 경로에 추가
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, project_root)
-
 from src.utils.logger import setup_logger
 from src.utils.config_loader import load_config_file
 from src.utils.directory import ensure_directories
@@ -29,6 +25,13 @@ from src.parsers.facts_parser import XBRLFactsParser
 from src.enrichers.market_data_enricher import enrich_market_data, enrich_leadership_data, MarketDataEnricher
 from src.collectors.financial_data_collector import collect_financial_data
 from src.screeners.stock_screener import StockScreener
+from src.screeners.candidate_filter import (
+    _check_institutional,
+    _check_pattern,
+    _check_supply_demand,
+    _filter_screening_candidates,
+    _sort_screen_results,
+)
 
 def load_config(config_path, profile=None):
     """Load configuration from JSON file, optionally applying a profile overlay."""
@@ -45,169 +48,6 @@ def load_config(config_path, profile=None):
         sys.exit(1)
 
 
-def _passes_min_threshold(value: Any, threshold: Any) -> bool:
-    """Return True when a numeric value passes a minimum threshold or the threshold is disabled."""
-    if threshold is None:
-        return True
-    return pd.notna(value) and value >= threshold
-
-
-def _passes_max_threshold(value: Any, threshold: Any) -> bool:
-    """Return True when a numeric value passes a maximum threshold or the threshold is disabled."""
-    if threshold is None:
-        return True
-    return pd.notna(value) and value <= threshold
-
-
-def _check_supply_demand(company: Dict[str, Any], criteria: Dict[str, Any]) -> bool:
-    """Evaluate CANSLIM supply/demand using accumulation and optional breakout confirmation."""
-    if not criteria.get("require_supply_demand", False):
-        return True
-
-    accumulation_ok = _passes_min_threshold(
-        company.get("up_down_volume_ratio_50d"),
-        criteria.get("up_down_volume_ratio_min", 1.0),
-    )
-    volume_trend_ok = _passes_min_threshold(
-        company.get("volume_trend_50_200"),
-        criteria.get("volume_trend_50_200_min", 0.9),
-    )
-
-    breakout_confirmation_ok = True
-    if criteria.get("require_breakout_volume_confirmation", False):
-        near_action = bool(company.get("valid_breakout", False))
-        if criteria.get("confirm_volume_for_near_pivot", False):
-            near_action = near_action or bool(company.get("near_pivot", False))
-        if near_action:
-            breakout_confirmation_ok = _passes_min_threshold(
-                company.get("breakout_volume_ratio"),
-                criteria.get("breakout_volume_ratio_min", 1.3),
-            )
-
-    volume_dry_up_ok = True
-    if criteria.get("require_volume_dry_up", False):
-        volume_dry_up_ok = _passes_max_threshold(
-            company.get("volume_dry_up_ratio_10_50"),
-            criteria.get("volume_dry_up_ratio_max", 0.8),
-        )
-
-    return accumulation_ok and volume_trend_ok and breakout_confirmation_ok and volume_dry_up_ok
-
-
-def _check_institutional(company: Dict[str, Any], criteria: Dict[str, Any]) -> bool:
-    """Evaluate CANSLIM institutional sponsorship with support for ownership or holder-count proxies."""
-    if not criteria.get("require_institutional_sponsorship", False):
-        return True
-
-    ownership = company.get("institutional_ownership")
-    holders = company.get("institutional_holders")
-
-    ownership_ok = (
-        _passes_min_threshold(ownership, criteria.get("institutional_ownership_min"))
-        and _passes_max_threshold(ownership, criteria.get("institutional_ownership_max"))
-    )
-    holders_ok = _passes_min_threshold(
-        holders,
-        criteria.get("institutional_holders_min"),
-    )
-
-    mode = criteria.get("sponsorship_mode", "ownership")
-    if mode == "ownership_and_holders":
-        return ownership_ok and holders_ok
-    if mode == "ownership_or_holders":
-        return ownership_ok or holders_ok
-    if mode == "holders":
-        return holders_ok
-    return ownership_ok
-
-
-def _check_pattern(company: Dict[str, Any], criteria: Dict[str, Any]) -> bool:
-    """Evaluate CANSLIM N using high proximity, pivot setup, and breakout signals."""
-    if criteria.get("require_hybrid_setup", False):
-        price_vs_high = company.get("price_vs_52w_high")
-        base_depth = company.get("base_depth_65d")
-        breakout_ok = bool(company.get("valid_breakout", False))
-        pivot_ok = bool(company.get("near_pivot", False))
-        high_ok = _passes_min_threshold(
-            price_vs_high,
-            criteria.get("price_vs_52w_high_min", 0.85),
-        )
-        base_ok = pd.notna(base_depth) and base_depth <= criteria.get("base_depth_max", 0.35)
-        rs_line_ok = True
-        if criteria.get("require_rs_line_near_high_for_setup", False):
-            rs_line_ok = bool(company.get("rs_line_near_high", False))
-
-        setup_ok = breakout_ok
-        if criteria.get("allow_hybrid_breakout", True):
-            setup_ok = setup_ok or (pivot_ok and high_ok and base_ok)
-        else:
-            setup_ok = pivot_ok and high_ok and base_ok
-        return setup_ok and rs_line_ok
-
-    new_high_ok = True
-    if criteria.get("require_new_high_or_breakout", False):
-        price_vs_high = company.get("price_vs_52w_high", 0)
-        breakout_pct = company.get("breakout_pct")
-        pivot_ready = (
-            bool(company.get("near_pivot", False))
-            and price_vs_high >= criteria.get("price_vs_52w_high_hard_min", 0.90)
-            and pd.notna(breakout_pct)
-            and breakout_pct >= criteria.get("breakout_pct_min", -0.02)
-        )
-        new_high_ok = (
-            bool(company.get("new_52w_high", False))
-            or bool(company.get("valid_breakout", False))
-            or (criteria.get("allow_near_pivot_setup", False) and pivot_ready)
-        )
-    elif criteria.get("require_new_52w_high", False):
-        new_high_ok = bool(company.get("new_52w_high", False))
-
-    base_ok = True
-    base_depth = company.get("base_depth_65d")
-    if criteria.get("require_base_depth", False):
-        base_ok = (
-            pd.notna(base_depth)
-            and base_depth <= criteria.get("base_depth_max", 0.35)
-        )
-
-    breakout_ok = True
-    if criteria.get("require_near_pivot", False):
-        breakout_ok = breakout_ok and bool(company.get("near_pivot", False))
-    if criteria.get("require_valid_breakout", False):
-        breakout_ok = breakout_ok and bool(company.get("valid_breakout", False))
-
-    return new_high_ok and base_ok and breakout_ok
-
-
-def _sort_screen_results(filtered_companies: list[Dict[str, Any]], profile_name: str) -> None:
-    """Sort results in-place using a profile-aware ranking."""
-    if profile_name == "canslim_hybrid":
-        filtered_companies.sort(
-            key=lambda x: (
-                int(bool(x.get("valid_breakout", False))),
-                int(bool(x.get("near_pivot", False))),
-                x.get("breakout_volume_ratio", 0) or 0,
-                x.get("rs_rating", 0) or 0,
-                int(bool(x.get("rs_line_near_high", False))),
-                x.get("price_vs_52w_high", 0) or 0,
-                -((x.get("volume_dry_up_ratio_10_50", 999) or 999)),
-                x.get("quarterly_eps_growth", 0) or 0,
-                x.get("annual_eps_cagr", 0) or 0,
-            ),
-            reverse=True,
-        )
-        return
-
-    filtered_companies.sort(
-        key=lambda x: (
-            (x.get("quarterly_eps_growth", 0) or 0)
-            + (x.get("annual_eps_cagr", 0) or 0)
-            + (x.get("revenue_growth", 0) or 0),
-            x.get("rs_rating", 0) or 0,
-            x.get("price_vs_52w_high", 0) or 0,
-        ),
-        reverse=True,
-    )
 
 def download_data(config):
     """Download data from SEC EDGAR."""
@@ -363,6 +203,9 @@ def parse_data(config):
         traceback.print_exc()
         return False
 
+
+
+
 def screen_stocks(config):
     """Screen stocks based on criteria."""
     logger.info("Screening stocks based on criteria...")
@@ -497,146 +340,21 @@ def screen_stocks(config):
             return
         
         # 기준에 맞는 회사 필터링
-        filtered_companies = []
-        criteria_counts = {criterion: 0 for criterion in [
-            "eps", "eps_cagr", "revenue", "margin", "roe", "debt", "mktcap",
-            "sp500", "rs", "near_high", "liquidity", "rs_line", "industry",
-            "market_direction", "supply_demand", "institutional", "new_high", "base", "breakout"
-        ]}
         market_direction_ok = True
         if market_direction_criteria.get("required", False):
             allowed_statuses = market_direction_criteria.get("allowed_statuses", ["confirmed_uptrend"])
             market_direction_ok = market_direction.get("market_direction_status") in allowed_statuses
-        
-        for company in companies:
-            # 필수 필드가 있는지 확인
-            if not all(key in company for key in ['ticker', 'name']):
-                continue
-            
-            # 필수 재무 데이터가 없는 경우, 디버깅을 위해 기본값 추가 (테스트용)
-            if any(key not in company for key in ["quarterly_eps_growth", "annual_eps_cagr", "revenue_growth", "profit_margin", "roe"]):
-                # 테스트 모드에서는 누락된 데이터를 임의의 값으로 채워 스크리닝 테스트
-                if test_mode:
-                    if "quarterly_eps_growth" not in company: company["quarterly_eps_growth"] = 0.05  # 5%
-                    if "annual_eps_cagr" not in company: company["annual_eps_cagr"] = 0.07  # 7%
-                    if "revenue_growth" not in company: company["revenue_growth"] = 0.06  # 6% 
-                    if "profit_margin" not in company: company["profit_margin"] = 0.04  # 4%
-                    if "roe" not in company: company["roe"] = 0.08  # 8%
-                    if "debt_to_equity" not in company: company["debt_to_equity"] = 1.2  # 1.2
-            
-            # 각 기준에 대해 개별적으로 검사 (누락된 데이터 처리)
-            eps_growth_ok = company.get("quarterly_eps_growth", 0) >= criteria.get("quarterly_eps_growth", 0)
-            if eps_growth_ok: criteria_counts["eps"] += 1
-            
-            eps_cagr_ok = company.get("annual_eps_cagr", 0) >= criteria.get("annual_eps_cagr", 0)
-            if eps_cagr_ok: criteria_counts["eps_cagr"] += 1
-            
-            revenue_ok = _passes_min_threshold(
-                company.get("revenue_growth"),
-                criteria.get("revenue_growth", 0),
-            )
-            if revenue_ok: criteria_counts["revenue"] += 1
-            
-            margin_ok = _passes_min_threshold(
-                company.get("profit_margin"),
-                criteria.get("profit_margin", 0),
-            )
-            if margin_ok: criteria_counts["margin"] += 1
-            
-            roe_ok = _passes_min_threshold(
-                company.get("roe"),
-                criteria.get("roe", 0),
-            )
-            if roe_ok: criteria_counts["roe"] += 1
-            
-            # 부채비율은 낮을수록 좋음 (0보다 작으면 안됨)
-            debt_to_equity = company.get("debt_to_equity", float('inf'))
-            # 음수 부채비율은 무시하고 양수 부채비율만 필터링 (음수 또는 0이면 통과)
-            if debt_to_equity <= 0:
-                debt_ok = True
-            else:
-                debt_ok = _passes_max_threshold(
-                    debt_to_equity,
-                    criteria.get("debt_to_equity", float('inf')),
-                )
-            if debt_ok: criteria_counts["debt"] += 1
-            
-            # 시가총액은 최소값 이상이어야 함
-            mktcap_ok = _passes_min_threshold(
-                company.get("market_cap"),
-                criteria.get("min_market_cap", 0),
-            )
-            if mktcap_ok: criteria_counts["mktcap"] += 1
-            
-            # S&P 500 대비 성과 검사 (선택적)
-            sp500_ok = True
-            if criteria.get("outperform_sp500", False):
-                sp500_ok = company.get("market_outperformance_12m", float("-inf")) > 0
-            if sp500_ok: criteria_counts["sp500"] += 1
 
-            rs_ok = _passes_min_threshold(
-                company.get("rs_rating"),
-                leadership_criteria.get("rs_rating_min", 80),
-            )
-            if rs_ok: criteria_counts["rs"] += 1
-
-            near_high_ok = _passes_min_threshold(
-                company.get("price_vs_52w_high"),
-                leadership_criteria.get("price_vs_52w_high_min", 0.85),
-            )
-            if near_high_ok: criteria_counts["near_high"] += 1
-
-            liquidity_ok = _passes_min_threshold(
-                company.get("avg_dollar_volume_50d"),
-                leadership_criteria.get("avg_dollar_volume_min", 0),
-            )
-            if liquidity_ok: criteria_counts["liquidity"] += 1
-
-            rs_line_ok = True
-            if leadership_criteria.get("rs_line_near_high", False):
-                rs_line_ok = bool(company.get("rs_line_near_high", False))
-            if rs_line_ok: criteria_counts["rs_line"] += 1
-
-            industry_ok = True
-            if leadership_criteria.get("require_industry_leadership", False):
-                industry_ok = (
-                    company.get("industry_rs_rank", 0) >= leadership_criteria.get("industry_rs_rank_min", 80)
-                    and company.get("industry_stock_rank", 0) >= leadership_criteria.get("industry_stock_rank_min", 80)
-                )
-            if industry_ok: criteria_counts["industry"] += 1
-
-            supply_demand_ok = _check_supply_demand(company, supply_demand_criteria)
-            if supply_demand_ok: criteria_counts["supply_demand"] += 1
-
-            institutional_ok = _check_institutional(company, institutional_criteria)
-            if institutional_ok: criteria_counts["institutional"] += 1
-
-            new_high_ok = _check_pattern(company, pattern_criteria)
-            if new_high_ok: criteria_counts["new_high"] += 1
-            base_ok = True
-            breakout_ok = True
-            if new_high_ok:
-                criteria_counts["base"] += 1
-                criteria_counts["breakout"] += 1
-
-            if market_direction_ok:
-                criteria_counts["market_direction"] += 1
-            
-            # 조건에 따라 시장 성과와 재무 지표 모두 고려
-            if test_mode:
-                # 테스트 모드: 시장 데이터만 있으면 회사를 포함
-                if mktcap_ok:  
-                    filtered_companies.append(company)
-            else:
-                # 일반 모드: 모든 조건 확인
-                if (
-                    eps_growth_ok and eps_cagr_ok and revenue_ok and margin_ok and roe_ok
-                    and debt_ok and mktcap_ok and sp500_ok
-                    and rs_ok and near_high_ok and liquidity_ok and rs_line_ok and industry_ok
-                    and market_direction_ok and supply_demand_ok and institutional_ok
-                    and new_high_ok and base_ok and breakout_ok
-                ):
-                    filtered_companies.append(company)
+        filtered_companies, criteria_counts = _filter_screening_candidates(
+            companies,
+            criteria,
+            leadership_criteria,
+            supply_demand_criteria,
+            institutional_criteria,
+            pattern_criteria,
+            market_direction_ok,
+            test_mode,
+        )
         
         # Screening criteria summary
         print("\nCompanies passing criteria by category:")
