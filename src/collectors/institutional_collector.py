@@ -297,6 +297,80 @@ def aggregate_institutional_trends(
     return trends.where(pd.notna(trends), None)
 
 
+def _name_tokens(value: Any) -> set[str]:
+    return {token for token in _normalize_name(value).split() if len(token) > 1}
+
+
+def _name_similarity(left: Any, right: Any) -> float:
+    left_tokens = _name_tokens(left)
+    right_tokens = _name_tokens(right)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    overlap = len(left_tokens & right_tokens)
+    return overlap / max(len(left_tokens), len(right_tokens))
+
+
+def build_cusip_ticker_mapping(
+    companies: Sequence[Mapping[str, Any]],
+    holdings: Sequence[Mapping[str, Any]],
+    *,
+    min_score: float = 0.67,
+) -> Tuple[Dict[str, str], Dict[str, Any]]:
+    """Infer a CUSIP-to-ticker map from 13F issuer names and company names.
+
+    This is a convenience bootstrapper. Persist and review its output before
+    relying on it for production screening because issuer names can be ambiguous.
+    """
+    company_rows = [
+        {"ticker": str(company.get("ticker") or "").upper().replace(".", "-"), "name": company.get("name")}
+        for company in companies
+        if company.get("ticker") and company.get("name")
+    ]
+    mapping: Dict[str, str] = {}
+    suggestions: List[Dict[str, Any]] = []
+    seen_cusips: set[str] = set()
+    for holding in holdings:
+        cusip = normalize_cusip(holding.get("cusip"))
+        if not cusip or cusip in seen_cusips:
+            continue
+        seen_cusips.add(cusip)
+        issuer = holding.get("issuer")
+        best_company = None
+        best_score = 0.0
+        for company in company_rows:
+            score = _name_similarity(issuer, company["name"])
+            if score > best_score:
+                best_score = score
+                best_company = company
+        if best_company and best_score >= min_score:
+            mapping[cusip] = best_company["ticker"]
+        suggestions.append(
+            {
+                "cusip": cusip,
+                "issuer": issuer,
+                "suggested_ticker": best_company["ticker"] if best_company else None,
+                "suggested_company": best_company["name"] if best_company else None,
+                "score": best_score,
+                "mapped": bool(best_company and best_score >= min_score),
+            }
+        )
+    coverage = {
+        "total_cusips": len(seen_cusips),
+        "mapped_count": len(mapping),
+        "unmapped_count": len(seen_cusips) - len(mapping),
+        "mapping_rate": len(mapping) / len(seen_cusips) if seen_cusips else 0.0,
+        "suggestions": suggestions,
+    }
+    return mapping, coverage
+
+
+def export_cusip_mapping_coverage(coverage: Mapping[str, Any], path: str) -> str:
+    """Write CUSIP mapping suggestions/coverage to CSV for manual review."""
+    Path(os.path.dirname(path) or ".").mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(coverage.get("suggestions", [])).to_csv(path, index=False)
+    return path
+
+
 def load_cusip_ticker_mapping(path: Optional[str]) -> Dict[str, str]:
     """Load optional CUSIP-to-ticker mapping from CSV or JSON."""
     if not path or not os.path.exists(path):

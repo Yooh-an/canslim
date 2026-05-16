@@ -52,10 +52,19 @@ class ResultsFormatter:
         
         # Define the columns to include in the output
         output_columns = [
-            'ticker', 'name', 'market_cap', 'exchange',
+            'ticker', 'name', 'canslim_score', 'score_band',
+            'c_score', 'a_score', 'n_score', 's_score', 'l_score', 'i_score', 'm_score',
+            'market_cap', 'exchange',
+            'quarterly_eps_growth', 'annual_eps_cagr', 'revenue_growth',
             'eps_qtr_growth', 'revenue_qtr_growth', 'eps_3yr_cagr',
             'profit_margin', 'roe', 'debt_to_equity',
-            'price_performance', 'market_outperformance'
+            'rs_rating', 'price_vs_52w_high', 'avg_dollar_volume_50d',
+            'price_performance', 'market_outperformance', 'market_outperformance_12m',
+            'buy_zone_low', 'buy_zone_high', 'stop_loss_price', 'profit_target_low', 'profit_target_high',
+            'institutional_holders', 'institutional_value', 'institutional_accumulation_score',
+            'new_holder_count', 'increased_holder_count', 'decreased_holder_count', 'exited_holder_count',
+            'insider_signal', 'insider_buy_count_90d', 'insider_sell_count_90d', 'net_insider_buy_value_90d',
+            'pass_reasons', 'fail_reasons'
         ]
         
         # Add institutional ownership if available
@@ -68,9 +77,10 @@ class ResultsFormatter:
         
         # Format percentage columns
         percentage_columns = [
+            'quarterly_eps_growth', 'annual_eps_cagr', 'revenue_growth',
             'eps_qtr_growth', 'revenue_qtr_growth', 'eps_3yr_cagr',
-            'profit_margin', 'roe', 'price_performance', 
-            'market_outperformance', 'institutional_ownership'
+            'profit_margin', 'roe', 'price_vs_52w_high', 'price_performance',
+            'market_outperformance', 'market_outperformance_12m', 'institutional_ownership'
         ]
         
         for col in percentage_columns:
@@ -83,6 +93,12 @@ class ResultsFormatter:
                 lambda x: f"${x/1e9:.2f}B" if x >= 1e9 else f"${x/1e6:.2f}M" if pd.notnull(x) else "N/A"
             )
         
+        for col in ['pass_reasons', 'fail_reasons']:
+            if col in result_df.columns:
+                result_df[col] = result_df[col].map(
+                    lambda value: '; '.join(value) if isinstance(value, list) else (value if pd.notnull(value) else '')
+                )
+
         # Convert ticker to uppercase
         if 'ticker' in result_df.columns:
             result_df['ticker'] = result_df['ticker'].str.upper()
@@ -186,6 +202,62 @@ class ResultsFormatter:
         
         return self.output_file
     
+    def export_to_markdown(self, df: pd.DataFrame, summary: Dict[str, Any]) -> str:
+        """Export a human-readable CAN SLIM Markdown report next to the CSV."""
+        markdown_file = str(Path(self.output_file).with_suffix('.md'))
+        Path(os.path.dirname(markdown_file)).mkdir(parents=True, exist_ok=True)
+        lines = [
+            "# CAN SLIM Screening Report",
+            "",
+            f"Total candidates: {summary.get('total_companies', len(df))}",
+            "",
+            "## Top Candidates",
+            "",
+        ]
+        if df.empty:
+            lines.append("No companies passed the screen.")
+        else:
+            for _, row in df.head(25).iterrows():
+                ticker = row.get('ticker', 'N/A')
+                name = row.get('name', 'Unknown')
+                score = row.get('canslim_score', 'N/A')
+                band = row.get('score_band', 'N/A')
+                component_summary = '/'.join(
+                    str(row.get(field, 'N/A')) for field in ['c_score', 'a_score', 'n_score', 's_score', 'l_score', 'i_score', 'm_score']
+                )
+                lines.extend([
+                    f"### {ticker} — {name}",
+                    f"- CAN SLIM score: {score} ({band})",
+                    f"- C/A/N/S/L/I/M: {component_summary}",
+                ])
+                trade_bits = []
+                for label, field in [
+                    ('Buy zone', 'buy_zone_low'),
+                    ('Buy zone high', 'buy_zone_high'),
+                    ('Stop loss', 'stop_loss_price'),
+                    ('Profit target low', 'profit_target_low'),
+                    ('Profit target high', 'profit_target_high'),
+                ]:
+                    if field in row and pd.notnull(row[field]):
+                        trade_bits.append(f"{label}: {row[field]}")
+                if trade_bits:
+                    lines.append(f"- Trade plan: {'; '.join(trade_bits)}")
+                if row.get('institutional_accumulation_score') is not None and pd.notnull(row.get('institutional_accumulation_score')):
+                    lines.append(f"- 13F accumulation score: {row.get('institutional_accumulation_score')}")
+                if row.get('insider_signal') is not None and pd.notnull(row.get('insider_signal')):
+                    lines.append(f"- Insider signal: {row.get('insider_signal')}")
+                for label, field in [('Pass reasons', 'pass_reasons'), ('Watch/fail reasons', 'fail_reasons')]:
+                    value = row.get(field)
+                    if isinstance(value, list):
+                        value = '; '.join(value)
+                    if value:
+                        lines.append(f"- {label}: {value}")
+                lines.append("")
+        with open(markdown_file, 'w') as f:
+            f.write('\n'.join(lines).rstrip() + '\n')
+        logger.info(f"Exported Markdown report to {markdown_file}")
+        return markdown_file
+
     def create_report(self, df: pd.DataFrame, sort_by: Optional[str] = None) -> str:
         """
         Create a formatted report from the screening results.
@@ -206,8 +278,9 @@ class ResultsFormatter:
         # Calculate summary statistics
         summary = self.add_summary_statistics(df)
         
-        # Export to CSV
+        # Export to CSV and Markdown
         output_file = self.export_to_csv(sorted_df)
+        self.export_to_markdown(sorted_df, summary)
         
         # Log summary
         logger.info(f"Screening report generated with {summary['total_companies']} companies")

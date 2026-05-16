@@ -159,6 +159,8 @@ class MarketDataEnricher:
                     "rs_score",
                     "rs_rating",
                     "rs_line_near_high",
+                    "rs_line_new_high",
+                    "rs_line_pct_from_high",
                     "price_vs_52w_high",
                     "avg_dollar_volume_50d",
                     "volume_trend_50_200",
@@ -179,6 +181,8 @@ class MarketDataEnricher:
                     "institutional_holders",
                     "industry_rs_rank",
                     "industry_stock_rank",
+                    "industry_group_leader",
+                    "industry_stock_leader",
                     "industry_group",
                 ]:
                     if field in company_market_data:
@@ -241,6 +245,8 @@ class MarketDataEnricher:
             "rs_score",
             "rs_rating",
             "rs_line_near_high",
+            "rs_line_new_high",
+            "rs_line_pct_from_high",
             "price_vs_52w_high",
             "avg_dollar_volume_50d",
             "volume_trend_50_200",
@@ -257,6 +263,8 @@ class MarketDataEnricher:
             "valid_breakout",
             "industry_rs_rank",
             "industry_stock_rank",
+            "industry_group_leader",
+            "industry_stock_leader",
             "industry_group",
         ]
 
@@ -761,7 +769,10 @@ class MarketDataEnricher:
                 aligned.columns = ["stock", "benchmark"]
                 rs_line = aligned["stock"] / aligned["benchmark"]
                 rs_line_high = rs_line.tail(252).max()
-                metrics["rs_line_near_high"] = bool(rs_line.iloc[-1] >= rs_line_high * self.config.get("leadership_criteria", {}).get("rs_line_high_threshold", 0.95))
+                latest_rs_line = rs_line.iloc[-1]
+                metrics["rs_line_near_high"] = bool(latest_rs_line >= rs_line_high * self.config.get("leadership_criteria", {}).get("rs_line_high_threshold", 0.95))
+                metrics["rs_line_new_high"] = bool(latest_rs_line >= rs_line_high) if pd.notna(rs_line_high) and rs_line_high > 0 else False
+                metrics["rs_line_pct_from_high"] = float(latest_rs_line / rs_line_high - 1) if pd.notna(rs_line_high) and rs_line_high > 0 else np.nan
                 metrics["market_outperformance_12m"] = self._return_over_days(aligned["stock"], 252) - self._return_over_days(aligned["benchmark"], 252)
 
         if not volume.empty:
@@ -817,7 +828,7 @@ class MarketDataEnricher:
         try:
             with open(output_file, "w") as f:
                 json.dump(output, f, indent=2)
-            logger.info(f"Saved market direction data to {output_file}: {status}")
+            logger.info(f"Saved market direction data to {output_file}: {output.get('market_direction_status')}")
         except Exception as e:
             logger.warning(f"Failed to save market direction data: {e}")
 
@@ -888,6 +899,8 @@ class MarketDataEnricher:
             group = row["industry_group"]
             results[ticker]["industry_rs_rank"] = float(industry_ranks[group])
             results[ticker]["industry_stock_rank"] = float(row["industry_stock_rank"])
+            results[ticker]["industry_group_leader"] = bool(industry_ranks[group] >= 80)
+            results[ticker]["industry_stock_leader"] = bool(row["industry_stock_rank"] >= 80)
 
     def _fetch_single_yfinance_ticker(self, ticker: str) -> Dict[str, Any]:
         """Fetch one ticker with fast_info first, then fall back to info."""

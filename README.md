@@ -124,7 +124,7 @@ The optional `institutional_data` section supports CAN SLIM's institutional spon
 
 - If `manager_ciks` is provided, `enrich` downloads the latest and previous `13F-HR` information tables for those SEC manager CIKs.
 - If `manager_ciks` is empty, it reads local XML files from `data/raw/institutional_13f/current` and `data/raw/institutional_13f/previous`.
-- A `cusip_ticker_mapping` CSV/JSON can map 13F CUSIPs to tickers. Without it, the fallback is normalized issuer/company-name matching.
+- A `cusip_ticker_mapping` CSV/JSON can map 13F CUSIPs to tickers. Without it, the fallback is normalized issuer/company-name matching. The collector also includes helpers to infer mapping suggestions and export mapping coverage for manual review.
 - Enriched fields include `institutional_holders`, `institutional_value`, `institutional_holders_qoq_change`, `institutional_value_qoq_change`, `new_holder_count`, `increased_holder_count`, `decreased_holder_count`, `exited_holder_count`, `institutional_accumulation_score`, and `top_accumulating_managers`.
 
 ## SEC Form 4 Insider Data
@@ -144,7 +144,11 @@ Passing candidates are enriched with a component scorecard:
 - `canslim_score`, `score_band`
 - `pass_reasons`, `fail_reasons`
 
-Default result sorting prefers `canslim_score` when present.
+Default result sorting prefers `canslim_score` when present. `create_report()` writes both CSV and a sibling Markdown report summarizing top candidates, component scores, trade plan levels, 13F flow, insider signal, and pass/fail reasons.
+
+## Leadership Enhancements
+
+Price enrichment includes CAN SLIM leadership metrics such as `rs_rating`, `rs_line_near_high`, `rs_line_new_high`, `rs_line_pct_from_high`, `industry_rs_rank`, `industry_stock_rank`, `industry_group_leader`, and `industry_stock_leader`.
 
 ## Project Structure
 
@@ -180,7 +184,7 @@ pytest -q
 Current expected result:
 
 ```text
-74 passed
+79 passed
 ```
 
 ## References

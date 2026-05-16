@@ -6,6 +6,8 @@ from src.collectors.institutional_collector import (
     Institutional13FCollector,
     aggregate_institutional_trends,
     apply_institutional_trends,
+    build_cusip_ticker_mapping,
+    export_cusip_mapping_coverage,
     parse_13f_information_table,
 )
 
@@ -75,6 +77,27 @@ def test_aggregate_institutional_trends_counts_holders_flows_and_qoq_changes():
     assert aapl["top_accumulating_managers"][0]["manager_name"] == "New Fund"
     assert msft["institutional_holders_qoq_change"] == 1
     assert msft["institutional_value_qoq_change"] is None
+
+
+def test_build_cusip_ticker_mapping_uses_name_similarity_and_reports_coverage(tmp_path):
+    companies = [
+        {"ticker": "AAPL", "name": "Apple Inc."},
+        {"ticker": "MSFT", "name": "Microsoft Corporation"},
+    ]
+    holdings = [
+        {"cusip": "037833100", "issuer": "APPLE INC"},
+        {"cusip": "594918104", "issuer": "MICROSOFT CORP"},
+        {"cusip": "000000000", "issuer": "UNKNOWN HOLDING"},
+    ]
+
+    mapping, coverage = build_cusip_ticker_mapping(companies, holdings, min_score=0.5)
+    output_file = tmp_path / "coverage.csv"
+    export_cusip_mapping_coverage(coverage, str(output_file))
+
+    assert mapping == {"037833100": "AAPL", "594918104": "MSFT"}
+    assert coverage["mapped_count"] == 2
+    assert coverage["unmapped_count"] == 1
+    assert output_file.exists()
 
 
 def test_apply_institutional_trends_uses_cusip_mapping_and_name_fallback():
