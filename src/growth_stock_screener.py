@@ -287,6 +287,16 @@ def screen_stocks(config):
             "volume_dry_up_ratio_10_50": 0,
             "institutional_ownership": 0,
             "institutional_holders": 0,
+            "institutional_holders_qoq_change": 0,
+            "institutional_value_qoq_change": 0,
+            "institutional_accumulation_score": 0,
+            "new_holder_count": 0,
+            "increased_holder_count": 0,
+            "decreased_holder_count": 0,
+            "exited_holder_count": 0,
+            "insider_buy_count_90d": 0,
+            "net_insider_buy_value_90d": 0,
+            "canslim_score": 0,
             "breakout_volume_ratio": 0,
             "new_52w_high": 0,
             "near_pivot": 0,
@@ -318,8 +328,10 @@ def screen_stocks(config):
             institutional_criteria.get("require_institutional_sponsorship", False)
             and metrics_counts.get("institutional_ownership", 0) == 0
             and metrics_counts.get("institutional_holders", 0) == 0
+            and metrics_counts.get("institutional_holders_qoq_change", 0) == 0
+            and metrics_counts.get("institutional_value_qoq_change", 0) == 0
         ):
-            missing_enrich_reasons.append("기관 수급 지표가 없습니다. pure CANSLIM 프로필은 기관 보유/보유기관 수가 필요합니다")
+            missing_enrich_reasons.append("기관 수급 지표가 없습니다. pure CANSLIM 프로필은 기관 보유/보유기관 수 또는 SEC 13F 기관 추세가 필요합니다")
         if market_direction_criteria.get("required", False) and not market_direction:
             missing_enrich_reasons.append("시장 방향 파일(data/processed/market_direction.json)이 없습니다")
 
@@ -378,8 +390,8 @@ def screen_stocks(config):
             
             # 결과 출력 - 상위 10개 회사만
             print("\nTop companies passing screening criteria:")
-            print(f"{'TICKER':<6} {'NAME':<30} {'Q EPS':<8} {'A EPS':<8} {'REV':<8} {'ROE':<8} {'RS':<6} {'52W':<7} {'MKTCAP($M)':<12}")
-            print("-" * 104)
+            print(f"{'TICKER':<6} {'NAME':<30} {'SCORE':<7} {'BAND':<12} {'Q EPS':<8} {'A EPS':<8} {'REV':<8} {'RS':<6} {'52W':<7} {'MKTCAP($M)':<12}")
+            print("-" * 114)
             
             for company in filtered_companies[:10]:
                 ticker = company.get('ticker', 'N/A')
@@ -391,12 +403,13 @@ def screen_stocks(config):
                 a_eps = f"{company.get('annual_eps_cagr', 0) * 100:.1f}%"
                 rev = f"{company.get('revenue_growth', 0) * 100:.1f}%"
                 margin = f"{company.get('profit_margin', 0) * 100:.1f}%"
-                roe = f"{company.get('roe', 0) * 100:.1f}%"
+                score = f"{company.get('canslim_score', 0):.1f}"
+                band = company.get('score_band', 'N/A')
                 rs = f"{company.get('rs_rating', 0):.0f}"
                 near_high = f"{company.get('price_vs_52w_high', 0) * 100:.1f}%"
                 mktcap = f"${company.get('market_cap', 0) / 1000000:.1f}M"
                 
-                print(f"{ticker:<6} {name:<30} {q_eps:<8} {a_eps:<8} {rev:<8} {roe:<8} {rs:<6} {near_high:<7} {mktcap:<12}")
+                print(f"{ticker:<6} {name:<30} {score:<7} {band:<12} {q_eps:<8} {a_eps:<8} {rev:<8} {rs:<6} {near_high:<7} {mktcap:<12}")
                 
             # 전체 결과 수가 10개 이상인 경우 추가 결과가 있음을 알려줌
             if len(filtered_companies) > 10:

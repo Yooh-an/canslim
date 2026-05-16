@@ -12,7 +12,9 @@
     "submissions_file": "data/raw/submissions.zip",
     "company_facts_dir": "data/raw/company_facts",
     "output_file": "data/processed/results.csv",
-    "cik_ticker_mapping": "data/processed/cik_ticker_mapping.csv"
+    "cik_ticker_mapping": "data/processed/cik_ticker_mapping.csv",
+    "_cusip_mapping_note": "선택 사항: 13F CUSIP을 ticker로 연결하는 CSV/JSON 경로입니다.",
+    "cusip_ticker_mapping": "data/processed/cusip_ticker_mapping.csv"
   },
   "download_settings": {
     "_comment": "SEC 다운로드 범위/속도 설정. company_limit=null이면 가능한 전체 회사를 대상으로 합니다.",
@@ -105,8 +107,28 @@
     "leadership_universe_size": null,
     "_cache_note": "price_cache_max_age_days는 가격 캐시 재사용 기간입니다. 최근 캐시가 있으면 재다운로드를 줄입니다.",
     "price_cache_max_age_days": 2,
+    "_ftd_note": "follow-through day는 rally low 이후 4~10일 사이 1.25% 이상 상승 + 거래량 증가로 판정합니다.",
+    "follow_through_min_gain": 0.0125,
+    "follow_through_min_day": 4,
+    "follow_through_max_day": 10,
+    "distribution_lookback_days": 25,
+    "rally_lookback_days": 30,
     "_info_fallback_note": "use_yfinance_info_fallback=true이면 느린 yfinance info 조회까지 사용합니다.",
     "use_yfinance_info_fallback": false
+  },
+  "institutional_data": {
+    "_comment": "무료 SEC 13F 기반 기관 보유 추세. 기본값은 비활성화이며, manager_ciks를 넣으면 최신/직전 13F를 내려받습니다. manager_ciks가 비어 있으면 raw_13f_dir/current 및 previous의 로컬 XML만 읽습니다.",
+    "enabled": false,
+    "raw_13f_dir": "data/raw/institutional_13f",
+    "cusip_ticker_mapping": "data/processed/cusip_ticker_mapping.csv",
+    "manager_ciks": []
+  },
+  "insider_data": {
+    "_comment": "무료 SEC Form 4 내부자 거래 보조 신호. enabled=true이면 company_ciks 또는 회사 목록의 cik로 최근 Form 4를 가져옵니다.",
+    "enabled": false,
+    "raw_form4_dir": "data/raw/insider_form4",
+    "company_ciks": [],
+    "limit_per_company": 20
   },
   "optional_api_keys": {
     "_comment": "선택 API 키. 현재 핵심 파이프라인은 SEC + Yahoo Finance만으로 동작합니다.",

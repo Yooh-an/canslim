@@ -10,7 +10,8 @@
     "submissions_file": "data/raw/submissions.zip",
     "company_facts_dir": "data/raw/company_facts",
     "output_file": "data/processed/results.csv",
-    "cik_ticker_mapping": "data/processed/cik_ticker_mapping.csv"
+    "cik_ticker_mapping": "data/processed/cik_ticker_mapping.csv",
+    "cusip_ticker_mapping": "data/processed/cusip_ticker_mapping.csv"
   },
   "download_settings": {
     "max_workers": 4,
@@ -28,9 +29,26 @@
     "leadership_chunk_size": 25,
     "leadership_universe_size": null,
     "price_cache_max_age_days": 2,
+    "follow_through_min_gain": 0.0125,
+    "follow_through_min_day": 4,
+    "follow_through_max_day": 10,
+    "distribution_lookback_days": 25,
+    "rally_lookback_days": 30,
     "enrich_only_screenable_candidates": false,
     "yfinance_max_workers": 6,
     "use_yfinance_info_fallback": false
+  },
+  "institutional_data": {
+    "enabled": false,
+    "raw_13f_dir": "data/raw/institutional_13f",
+    "cusip_ticker_mapping": "data/processed/cusip_ticker_mapping.csv",
+    "manager_ciks": []
+  },
+  "insider_data": {
+    "enabled": false,
+    "raw_form4_dir": "data/raw/insider_form4",
+    "company_ciks": [],
+    "limit_per_company": 20
   },
   "optional_api_keys": {
     "fmp_api_key": null

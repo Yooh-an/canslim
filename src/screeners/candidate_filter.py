@@ -6,6 +6,9 @@ from typing import Any, Dict
 
 import pandas as pd
 
+from src.screeners.canslim_scoring import calculate_canslim_score
+from src.screeners.trade_rules import add_trade_rules
+
 def _passes_min_threshold(value: Any, threshold: Any) -> bool:
     """Return True when a numeric value passes a minimum threshold or the threshold is disabled."""
     if threshold is None:
@@ -71,12 +74,30 @@ def _check_institutional(company: Dict[str, Any], criteria: Dict[str, Any]) -> b
         holders,
         criteria.get("institutional_holders_min"),
     )
+    holders_trend_ok = _passes_min_threshold(
+        company.get("institutional_holders_qoq_change"),
+        criteria.get("institutional_holders_qoq_min"),
+    )
+    value_trend_ok = _passes_min_threshold(
+        company.get("institutional_value_qoq_change"),
+        criteria.get("institutional_value_qoq_min"),
+    )
+    trend_ok = holders_trend_ok and value_trend_ok
+    accumulation_threshold = criteria.get("institutional_accumulation_score_min")
+    accumulation_ok = (
+        accumulation_threshold is not None
+        and _passes_min_threshold(company.get("institutional_accumulation_score"), accumulation_threshold)
+    )
 
     mode = criteria.get("sponsorship_mode", "ownership")
     if mode == "ownership_and_holders":
         return ownership_ok and holders_ok
     if mode == "ownership_or_holders":
         return ownership_ok or holders_ok
+    if mode == "ownership_or_holders_or_trend":
+        return ownership_ok or holders_ok or trend_ok or accumulation_ok
+    if mode == "trend":
+        return trend_ok or accumulation_ok
     if mode == "holders":
         return holders_ok
     return ownership_ok
@@ -161,6 +182,7 @@ def _sort_screen_results(filtered_companies: list[Dict[str, Any]], profile_name:
 
     filtered_companies.sort(
         key=lambda x: (
+            x.get("canslim_score", 0) or 0,
             (x.get("quarterly_eps_growth", 0) or 0)
             + (x.get("annual_eps_cagr", 0) or 0)
             + (x.get("revenue_growth", 0) or 0),
@@ -284,6 +306,15 @@ def _filter_screening_candidates(
             if criterion_passed:
                 criteria_counts[criterion] += 1
         if passed:
-            filtered_companies.append(company)
+            scored_company = calculate_canslim_score(
+                company,
+                criteria,
+                leadership_criteria,
+                supply_demand_criteria,
+                institutional_criteria,
+                pattern_criteria,
+                market_direction_ok,
+            )
+            filtered_companies.append(add_trade_rules(scored_company))
 
     return filtered_companies, criteria_counts

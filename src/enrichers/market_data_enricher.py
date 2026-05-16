@@ -14,6 +14,10 @@ import numpy as np
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 
+from src.api.sec_client import SECClient
+from src.collectors.insider_collector import enrich_companies_with_insider_data
+from src.collectors.institutional_collector import enrich_companies_with_13f_data
+from src.screeners.market_direction import analyze_market_direction
 from src.utils.yahoo_finance import configure_yfinance_user_agent
 
 try:
@@ -798,37 +802,17 @@ class MarketDataEnricher:
         if benchmark_history is None or benchmark_history.empty:
             return
 
-        close = self._history_series(benchmark_history, "Close")
-        volume = self._history_series(benchmark_history, "Volume")
-        if len(close) < 200:
+        output = analyze_market_direction(
+            benchmark_history,
+            benchmark=market_data_config.get("leadership_benchmark", "SPY"),
+            rally_lookback=market_data_config.get("rally_lookback_days", 30),
+            distribution_lookback=market_data_config.get("distribution_lookback_days", 25),
+            ftd_min_gain=market_data_config.get("follow_through_min_gain", 0.0125),
+            ftd_min_day=market_data_config.get("follow_through_min_day", 4),
+            ftd_max_day=market_data_config.get("follow_through_max_day", 10),
+        )
+        if output.get("market_direction_status") == "unknown":
             return
-
-        sma50 = close.rolling(50).mean()
-        sma200 = close.rolling(200).mean()
-        close_above_50 = bool(float(close.iloc[-1]) > float(sma50.iloc[-1]))
-        sma50_above_200 = bool(float(sma50.iloc[-1]) > float(sma200.iloc[-1]))
-        market_return_21d = self._return_over_days(close, 21)
-        distribution_days = self._distribution_days(close, volume, lookback=25)
-
-        if close_above_50 and sma50_above_200 and distribution_days <= 4 and market_return_21d > 0:
-            status = "confirmed_uptrend"
-        elif close_above_50 and distribution_days <= 6:
-            status = "uptrend_under_pressure"
-        else:
-            status = "correction"
-
-        output = {
-            "benchmark": market_data_config.get("leadership_benchmark", "SPY"),
-            "as_of": pd.Timestamp.utcnow().date().isoformat(),
-            "market_direction_status": status,
-            "close_above_50dma": close_above_50,
-            "sma50_above_sma200": sma50_above_200,
-            "market_return_21d": market_return_21d,
-            "distribution_days_25d": distribution_days,
-            "latest_close": float(close.iloc[-1]),
-            "sma50": float(sma50.iloc[-1]),
-            "sma200": float(sma200.iloc[-1]),
-        }
         output_file = os.path.join(self.processed_dir, "market_direction.json")
         try:
             with open(output_file, "w") as f:
@@ -1072,11 +1056,35 @@ def enrich_market_data(config, use_external_api: bool = False):
         # SEC 데이터만 사용
         enriched_companies = enricher.enrich_companies_with_market_data(company_limit)
         
+        sec_client = None
+        needs_sec_client = (
+            config.get("institutional_data", {}).get("enabled", False)
+            and bool(config.get("institutional_data", {}).get("manager_ciks"))
+        ) or config.get("insider_data", {}).get("enabled", False)
+        if needs_sec_client:
+            user_agent = config.get("sec_api", {}).get("user_agent")
+            rate_limit = config.get("sec_api", {}).get("rate_limit_delay", 0.1)
+            sec_client = SECClient(user_agent=user_agent, rate_limit_delay=rate_limit)
+
+        # Add optional free SEC 13F institutional sponsorship trends.
+        if enriched_companies and config.get("institutional_data", {}).get("enabled", False):
+            print("[enrich] Starting SEC 13F institutional enrichment", flush=True)
+            enriched_companies = enrich_companies_with_13f_data(enriched_companies, config, sec_client=sec_client)
+            print("[enrich] Applied SEC 13F institutional enrichment", flush=True)
+
+        # Add optional SEC Form 4 insider activity as a supporting signal.
+        if enriched_companies and config.get("insider_data", {}).get("enabled", False):
+            print("[enrich] Starting SEC Form 4 insider enrichment", flush=True)
+            enriched_companies = enrich_companies_with_insider_data(enriched_companies, config, sec_client=sec_client)
+            print("[enrich] Applied SEC Form 4 insider enrichment", flush=True)
+
         # Replace original file with enriched file
         if enriched_companies:
             processed_dir = config.get("data_paths", {}).get("processed_data_dir", "data/processed")
             companies_list_file = os.path.join(processed_dir, "companies_list.json")
             enriched_file = os.path.join(processed_dir, "companies_list_enriched.json")
+            with open(enriched_file, 'w') as f:
+                json.dump(enriched_companies, f, indent=2)
             
             # Back up original file
             backup_file = os.path.join(processed_dir, "companies_list_backup.json")

@@ -52,6 +52,51 @@ class TestPureProfileLogic(unittest.TestCase):
         self.assertTrue(_check_institutional({"institutional_holders": 5}, criteria))
         self.assertFalse(_check_institutional({"institutional_ownership": 0.01, "institutional_holders": 1}, criteria))
 
+    def test_institutional_support_accepts_positive_13f_trend(self):
+        criteria = {
+            "require_institutional_sponsorship": True,
+            "sponsorship_mode": "ownership_or_holders_or_trend",
+            "institutional_ownership_min": 0.05,
+            "institutional_ownership_max": 0.95,
+            "institutional_holders_min": 3,
+            "institutional_holders_qoq_min": 0,
+            "institutional_value_qoq_min": 0,
+        }
+
+        self.assertTrue(
+            _check_institutional(
+                {
+                    "institutional_holders_qoq_change": 4,
+                    "institutional_value_qoq_change": 0.12,
+                },
+                criteria,
+            )
+        )
+        self.assertFalse(
+            _check_institutional(
+                {
+                    "institutional_holders_qoq_change": -2,
+                    "institutional_value_qoq_change": -0.05,
+                },
+                criteria,
+            )
+        )
+
+    def test_institutional_support_accepts_13f_accumulation_score(self):
+        criteria = {
+            "require_institutional_sponsorship": True,
+            "sponsorship_mode": "ownership_or_holders_or_trend",
+            "institutional_ownership_min": 0.05,
+            "institutional_ownership_max": 0.95,
+            "institutional_holders_min": 3,
+            "institutional_holders_qoq_min": 0,
+            "institutional_value_qoq_min": 0,
+            "institutional_accumulation_score_min": 60,
+        }
+
+        self.assertTrue(_check_institutional({"institutional_accumulation_score": 75}, criteria))
+        self.assertFalse(_check_institutional({"institutional_accumulation_score": 40}, criteria))
+
     def test_pattern_requires_real_new_high_or_breakout_signal(self):
         criteria = {
             "require_new_high_or_breakout": True,

@@ -8,7 +8,7 @@ A Python application for screening growth stocks with CAN SLIM and SEPA-style cr
 
 - Downloads SEC EDGAR submissions and company facts data
 - Parses XBRL company facts into financial metrics such as EPS growth, revenue growth, margins, ROE, and debt-to-equity
-- Enriches companies with price/relative-strength, liquidity, volume, market-direction, and optional institutional data
+- Enriches companies with price/relative-strength, liquidity, volume, market-direction, optional 13F institutional flow, and optional Form 4 insider data
 - Supports profile-based screening configurations
 - Exports results to CSV
 
@@ -102,9 +102,49 @@ Current configuration uses these top-level sections:
   "market_direction": {},
   "supply_demand_criteria": {},
   "institutional_criteria": {},
+  "institutional_data": {
+    "enabled": false,
+    "raw_13f_dir": "data/raw/institutional_13f",
+    "cusip_ticker_mapping": "data/processed/cusip_ticker_mapping.csv",
+    "manager_ciks": []
+  },
+  "insider_data": {
+    "enabled": false,
+    "raw_form4_dir": "data/raw/insider_form4",
+    "company_ciks": [],
+    "limit_per_company": 20
+  },
   "pattern_criteria": {}
 }
 ```
+
+## Free SEC 13F Institutional Data
+
+The optional `institutional_data` section supports CAN SLIM's institutional sponsorship check without paid APIs.
+
+- If `manager_ciks` is provided, `enrich` downloads the latest and previous `13F-HR` information tables for those SEC manager CIKs.
+- If `manager_ciks` is empty, it reads local XML files from `data/raw/institutional_13f/current` and `data/raw/institutional_13f/previous`.
+- A `cusip_ticker_mapping` CSV/JSON can map 13F CUSIPs to tickers. Without it, the fallback is normalized issuer/company-name matching.
+- Enriched fields include `institutional_holders`, `institutional_value`, `institutional_holders_qoq_change`, `institutional_value_qoq_change`, `new_holder_count`, `increased_holder_count`, `decreased_holder_count`, `exited_holder_count`, `institutional_accumulation_score`, and `top_accumulating_managers`.
+
+## SEC Form 4 Insider Data
+
+The optional `insider_data` section adds insider buy/sell activity from free SEC Form 4 XML filings.
+
+- If `company_ciks` is provided, `enrich` downloads recent Form 4 filings for those companies.
+- If `company_ciks` is empty, it uses CIKs from the current company list.
+- Enriched fields include `insider_buy_count_90d`, `insider_sell_count_90d`, `gross_insider_buy_value_90d`, `gross_insider_sell_value_90d`, `net_insider_buy_value_90d`, and `insider_signal`.
+- This is a supporting signal only; CAN SLIM screening remains centered on earnings, leadership, sponsorship, supply/demand, and market direction.
+
+## CAN SLIM Scoring
+
+Passing candidates are enriched with a component scorecard:
+
+- `c_score`, `a_score`, `n_score`, `s_score`, `l_score`, `i_score`, `m_score`
+- `canslim_score`, `score_band`
+- `pass_reasons`, `fail_reasons`
+
+Default result sorting prefers `canslim_score` when present.
 
 ## Project Structure
 
@@ -140,7 +180,7 @@ pytest -q
 Current expected result:
 
 ```text
-41 passed
+74 passed
 ```
 
 ## References

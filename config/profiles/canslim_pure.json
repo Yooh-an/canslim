@@ -42,10 +42,13 @@
   "institutional_criteria": {
     "_comment": "CANSLIM I: require at least some sponsorship, but reject over-owned names.",
     "require_institutional_sponsorship": true,
-    "sponsorship_mode": "ownership_or_holders",
+    "sponsorship_mode": "ownership_or_holders_or_trend",
     "institutional_ownership_min": 0.05,
     "institutional_ownership_max": 0.95,
-    "institutional_holders_min": 3
+    "institutional_holders_min": 3,
+    "institutional_holders_qoq_min": 0,
+    "institutional_value_qoq_min": 0,
+    "institutional_accumulation_score_min": 60
   },
   "pattern_criteria": {
     "_comment": "Pure CANSLIM should explicitly restore N: either near/new highs with a real pivot setup or a valid breakout.",
@@ -61,7 +64,7 @@
     "breakout_volume_ratio_min": 1.30
   },
   "market_data": {
-    "_comment": "Institutional sponsorship currently comes from yfinance info fallback for the pure profile.",
+    "_comment": "Institutional sponsorship can come from yfinance info fallback or optional SEC 13F enrichment.",
     "use_yfinance_info_fallback": true
   }
 }
