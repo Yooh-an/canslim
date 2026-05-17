@@ -17,6 +17,7 @@ from typing import Any, Dict
 from src.utils.logger import setup_logger
 from src.utils.config_loader import load_config_file
 from src.utils.directory import ensure_directories
+from src.utils.pipeline_status import collect_pipeline_status, print_pipeline_status
 from src.api.sec_client import SECClient
 from src.collectors.submissions_collector import SubmissionsCollector
 from src.collectors.facts_collector import CompanyFactsCollector
@@ -24,7 +25,9 @@ from src.parsers.submissions_parser import SubmissionsParser
 from src.parsers.facts_parser import XBRLFactsParser
 from src.enrichers.market_data_enricher import enrich_market_data, enrich_leadership_data, MarketDataEnricher
 from src.collectors.financial_data_collector import collect_financial_data
+from src.formatters.results_formatter import ResultsFormatter
 from src.screeners.stock_screener import StockScreener
+from src.screeners.ticker_analysis import analyze_ticker, format_ticker_analysis
 from src.screeners.candidate_filter import (
     _check_institutional,
     _check_pattern,
@@ -385,6 +388,7 @@ def screen_stocks(config):
             # DataFrame으로 변환하여 CSV로 저장
             df = pd.DataFrame(filtered_companies)
             df.to_csv(output_file, index=False)
+            ResultsFormatter(config).export_to_markdown(df, {"total_companies": len(df)})
             logger.info(f"Results saved to {output_file}")
             print(f"Results saved to {output_file}")
             
@@ -421,6 +425,7 @@ def screen_stocks(config):
             # 빈 결과 파일 생성
             with open(output_file, 'w') as f:
                 f.write("No companies passed the screening criteria.\n")
+            ResultsFormatter(config).export_to_markdown(pd.DataFrame(), {"total_companies": 0})
             print(f"Empty results file created at {output_file}")
     
     except Exception as e:
@@ -428,6 +433,35 @@ def screen_stocks(config):
         print(f"Error during stock screening: {e}")
         import traceback
         traceback.print_exc()
+
+def show_status(config):
+    """Print current local pipeline/data readiness."""
+    status = collect_pipeline_status(config)
+    print_pipeline_status(status)
+    return status
+
+
+def update_pipeline(config):
+    """Run only missing pipeline stages, then screen when data prerequisites are ready."""
+    status = show_status(config)
+    if not status["download_ready"]:
+        download_data(config)
+        status = collect_pipeline_status(config)
+    if not status["parse_ready"]:
+        parse_data(config)
+        status = collect_pipeline_status(config)
+    if not status["enrich_ready"]:
+        enrich_market_data(config, use_external_api=False)
+        status = collect_pipeline_status(config)
+    if status["institutional_required"] and not status["institutional_ready"]:
+        print("\nInstitutional sponsorship data is required but missing.")
+        if not config.get("institutional_data", {}).get("enabled", False):
+            print("Enable institutional_data in config or run a 13F enrichment workflow before strict screening.")
+        print_pipeline_status(status)
+        return False
+    screen_stocks(config)
+    return True
+
 
 def run_screening(config_path):
     """Run the stock screening process"""
@@ -475,8 +509,8 @@ def main():
     parser.add_argument(
         "--mode",
         required=True,
-        choices=["download", "parse", "enrich", "leadership", "financials", "screen"],  # "financials" mode added
-        help="Operation mode: download SEC data, parse data, enrich market data, enrich leadership data, collect financial data, or screen stocks"
+        choices=["download", "parse", "enrich", "leadership", "financials", "screen", "status", "update", "analyze"],
+        help="Operation mode: download SEC data, parse data, enrich data, screen stocks, inspect status, or update missing stages"
     )
     
     parser.add_argument(
@@ -491,6 +525,11 @@ def main():
     )
     
     parser.add_argument(
+        "--ticker",
+        help="Ticker to analyze when --mode analyze is used"
+    )
+
+    parser.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         default="INFO",
@@ -501,6 +540,7 @@ def main():
     
     # Load configuration
     config = load_config(args.config, profile=args.profile)
+    config["config_path"] = args.config
     
     # Setup logging
     log_file = config.get("logging", {}).get("log_file", "logs/screener.log")
@@ -528,6 +568,14 @@ def main():
         collect_financial_data(config)
     elif args.mode == "screen":
         screen_stocks(config)
+    elif args.mode == "status":
+        show_status(config)
+    elif args.mode == "update":
+        update_pipeline(config)
+    elif args.mode == "analyze":
+        if not args.ticker:
+            parser.error("--ticker is required when --mode analyze is used")
+        print(format_ticker_analysis(analyze_ticker(args.ticker, config)))
 
 if __name__ == "__main__":
     import logging

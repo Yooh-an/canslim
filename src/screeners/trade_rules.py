@@ -57,7 +57,12 @@ def calculate_trade_rules(
 def add_trade_rules(company: Dict[str, Any]) -> Dict[str, Any]:
     """Return a copy of a company record enriched with buy/sell rule levels."""
     enriched = dict(company)
-    current_price = enriched.get("current_price") or enriched.get("price") or enriched.get("latest_close")
+    current_price = (
+        enriched.get("current_price")
+        or enriched.get("price")
+        or enriched.get("latest_close")
+        or enriched.get("pivot_price")
+    )
     pivot_price = enriched.get("pivot_price")
     enriched.update(calculate_trade_rules(current_price, pivot_price))
     return enriched

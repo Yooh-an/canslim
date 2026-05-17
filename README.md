@@ -35,10 +35,25 @@ Run the full default workflow:
 Run steps individually:
 
 ```bash
+./screener status
 ./screener download
 ./screener parse
 ./screener enrich
 ./screener screen
+```
+
+For day-to-day use, either open the interactive terminal menu:
+
+```bash
+python terminal.py
+```
+
+or inspect status/run missing stages from the CLI:
+
+```bash
+python run_screener.py --mode status --config config/base.json --profile canslim_pure
+python run_screener.py --mode update --config config/base.json --profile canslim_watchlist
+python run_screener.py --mode analyze --ticker STRL --config config/base.json --profile canslim_pure
 ```
 
 Equivalent Python entrypoint:
@@ -48,6 +63,8 @@ python run_screener.py --mode download --config config/config.json
 python run_screener.py --mode parse --config config/config.json
 python run_screener.py --mode enrich --config config/config.json
 python run_screener.py --mode screen --config config/config.json
+python run_screener.py --mode status --config config/config.json
+python run_screener.py --mode analyze --ticker STRL --config config/config.json
 ```
 
 ## Profiles
@@ -62,11 +79,14 @@ python run_screener.py --mode screen --config config/base.json --profile canslim
 
 python run_screener.py --mode enrich --config config/base.json --profile canslim_hybrid
 python run_screener.py --mode screen --config config/base.json --profile canslim_hybrid
+
+python run_screener.py --mode screen --config config/base.json --profile canslim_watchlist
 ```
 
 Available profiles:
 
-- `canslim_pure`: closer to canonical CAN SLIM requirements
+- `canslim_pure`: closer to canonical CAN SLIM requirements, including institutional sponsorship
+- `canslim_watchlist`: broader candidate list; institutional data contributes to score/report but is not a hard requirement
 - `canslim_hybrid`: CAN SLIM growth filters plus SEPA-style technical setup filters
 
 ## Configuration Shape
@@ -184,7 +204,7 @@ pytest -q
 Current expected result:
 
 ```text
-79 passed
+93 passed
 ```
 
 ## References

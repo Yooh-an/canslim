@@ -1,0 +1,55 @@
+{
+  "_comment": "Seed list of widely followed 13F managers. CIKs are investment manager CIKs, not company CIKs. Use as a starting point for institutional_data.manager_ciks.",
+  "managers": [
+    {
+      "name": "Berkshire Hathaway",
+      "cik": "0001067983",
+      "category": "concentrated_value"
+    },
+    {
+      "name": "Vanguard Group",
+      "cik": "0000102909",
+      "category": "index_giant"
+    },
+    {
+      "name": "BlackRock",
+      "cik": "0001364742",
+      "category": "index_giant"
+    },
+    {
+      "name": "FMR LLC / Fidelity",
+      "cik": "0000315066",
+      "category": "active_mutual_fund"
+    },
+    {
+      "name": "Renaissance Technologies",
+      "cik": "0001037389",
+      "category": "quant"
+    },
+    {
+      "name": "Citadel Advisors",
+      "cik": "0001423053",
+      "category": "multi_strategy"
+    },
+    {
+      "name": "Millennium Management",
+      "cik": "0001273087",
+      "category": "multi_strategy"
+    },
+    {
+      "name": "Point72 Asset Management",
+      "cik": "0001603465",
+      "category": "multi_strategy"
+    },
+    {
+      "name": "Tiger Global Management",
+      "cik": "0001166559",
+      "category": "growth_manager"
+    },
+    {
+      "name": "Coatue Management",
+      "cik": "0001468158",
+      "category": "growth_manager"
+    }
+  ]
+}
