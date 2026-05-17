@@ -1,5 +1,8 @@
 """Tests for the interactive terminal menu."""
 
+import logging
+from types import SimpleNamespace
+
 from src.ui.terminal_app import TerminalApp, normalize_menu_choice
 
 
@@ -63,3 +66,12 @@ def test_terminal_app_runs_screen_with_watchlist_profile():
 
     assert calls == ["canslim_watchlist"]
     assert "screen done" in "\n".join(io.outputs)
+
+
+def test_ensure_logger_initializes_growth_screener_logger():
+    module = SimpleNamespace()
+
+    TerminalApp._ensure_logger(module)
+
+    assert module.logger.name == "growth_stock_screener"
+    assert module.logger.level == logging.INFO

@@ -407,7 +407,7 @@ class TerminalApp:
     @staticmethod
     def _ensure_logger(gss_module) -> None:
         if not hasattr(gss_module, "logger"):
-            gss_module.logger = setup_logger("growth_stock_screener", log_level=logging.INFO)
+            gss_module.logger = setup_logger("growth_stock_screener", level=logging.INFO)
 
 
 def main() -> None:
