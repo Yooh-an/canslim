@@ -22,8 +22,8 @@ def main():
     parser.add_argument(
         "--mode",
         required=True,
-        choices=["download", "parse", "enrich", "leadership", "financials", "screen", "status", "update", "analyze"],
-        help="Operation mode: download SEC data, parse data, enrich data, screen stocks, inspect status, or update missing stages"
+        choices=["download", "parse", "enrich", "leadership", "financials", "screen", "status", "update", "analyze", "tv-export"],
+        help="Operation mode: download SEC data, parse data, enrich data, screen stocks, export TradingView artifacts, inspect status, or update missing stages"
     )
     
     parser.add_argument(

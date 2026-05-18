@@ -28,12 +28,22 @@ from src.collectors.financial_data_collector import collect_financial_data
 from src.formatters.results_formatter import ResultsFormatter
 from src.screeners.stock_screener import StockScreener
 from src.screeners.ticker_analysis import analyze_ticker, format_ticker_analysis
+from src.integrations.tradingview_export import export_tradingview_artifacts
 from src.screeners.candidate_filter import (
     _check_institutional,
     _check_pattern,
     _check_supply_demand,
     _filter_screening_candidates,
     _sort_screen_results,
+)
+from src.ui.rich_printer import (
+    print_screening_header,
+    print_screening_criteria,
+    print_metrics_stats,
+    print_criteria_breakdown,
+    print_results_table,
+    print_missing_enrich_warning,
+    print_saved_result,
 )
 
 def load_config(config_path, profile=None):
@@ -231,9 +241,7 @@ def screen_stocks(config):
             companies = json.load(f)
         
         logger.info(f"Loaded data for {len(companies)} companies")
-        print(f"Loaded data for {len(companies)} companies")
-        if config.get("profile_name"):
-            print(f"Active profile: {config.get('profile_name')}")
+        print_screening_header(len(companies), config.get("profile_name"))
         
         # Get screening criteria
         criteria = config.get("screening_criteria", {})
@@ -250,28 +258,10 @@ def screen_stocks(config):
                 market_direction = json.load(f)
         
         # Output screening criteria
-        print("\nScreening Criteria:")
-        print(f"- Quarterly EPS Growth: ≥ {criteria.get('quarterly_eps_growth', 0.20) * 100:.1f}%")
-        print(f"- Annual EPS Growth (CAGR): ≥ {criteria.get('annual_eps_cagr', 0.20) * 100:.1f}%")
-        print(f"- Revenue Growth: ≥ {criteria.get('revenue_growth', 0.15) * 100:.1f}%")
-        print(f"- Profit Margin: ≥ {criteria.get('profit_margin', 0.10) * 100:.1f}%")
-        print(f"- Return on Equity: ≥ {criteria.get('roe', 0.15) * 100:.1f}%")
-        print(f"- Debt to Equity: ≤ {criteria.get('debt_to_equity', 1.0)}")
-        print(f"- Minimum Market Cap: ${criteria.get('min_market_cap', 200000000) / 1000000:.1f}M")
-        if criteria.get('outperform_sp500', True):
-            print("- Must outperform S&P 500")
-        print(f"- RS Rating: ≥ {leadership_criteria.get('rs_rating_min', 80):.0f}")
-        print(f"- Price vs 52-week High: ≥ {leadership_criteria.get('price_vs_52w_high_min', 0.85) * 100:.1f}%")
-        print(f"- 50-day Avg Dollar Volume: ≥ ${leadership_criteria.get('avg_dollar_volume_min', 0) / 1000000:.1f}M")
-        if market_direction_criteria.get("required", False):
-            print(f"- Market Direction: {market_direction.get('market_direction_status', 'missing')} in {market_direction_criteria.get('allowed_statuses', [])}")
-        if supply_demand_criteria.get("require_supply_demand", False):
-            print(f"- Up/Down Volume Ratio: ≥ {supply_demand_criteria.get('up_down_volume_ratio_min', 1.1):.2f}")
-            print(f"- 50/200 Volume Trend: ≥ {supply_demand_criteria.get('volume_trend_50_200_min', 1.0):.2f}")
-            if supply_demand_criteria.get("require_volume_dry_up", False):
-                print(f"- 10/50 Volume Dry-up Ratio: ≤ {supply_demand_criteria.get('volume_dry_up_ratio_max', 0.8):.2f}")
-        if institutional_criteria.get("require_institutional_sponsorship", False):
-            print(f"- Institutional Ownership: {institutional_criteria.get('institutional_ownership_min', 0.2) * 100:.1f}%~{institutional_criteria.get('institutional_ownership_max', 0.95) * 100:.1f}%")
+        print_screening_criteria(
+            criteria, leadership_criteria, market_direction_criteria,
+            market_direction, supply_demand_criteria, institutional_criteria,
+        )
         
         # Financial metrics statistics
         metrics_counts = {
@@ -312,9 +302,7 @@ def screen_stocks(config):
                 if metric in company and pd.notna(company[metric]) and company[metric] != 0:
                     metrics_counts[metric] += 1
         
-        print("\nFinancial Metrics Data Statistics:")
-        for metric, count in metrics_counts.items():
-            print(f"- {metric}: {count}/{len(companies)} companies ({count/len(companies)*100:.1f}%)")
+        print_metrics_stats(metrics_counts, len(companies))
 
         missing_enrich_reasons = []
         if criteria.get("outperform_sp500", False) and metrics_counts.get("rs_rating", 0) == 0:
@@ -347,11 +335,7 @@ def screen_stocks(config):
                 )
             else:
                 enrich_cmd = "./canslimsepa/bin/python run_screener.py --mode enrich --config config/config.json"
-            print("\nMarket/leadership enrichment data is missing, so screening would incorrectly return 0 results.")
-            for reason in missing_enrich_reasons:
-                print(f"- {reason}")
-            print("\nRun enrich first and wait for it to finish:")
-            print(enrich_cmd)
+            print_missing_enrich_warning(missing_enrich_reasons, enrich_cmd)
             return
         
         # 기준에 맞는 회사 필터링
@@ -372,12 +356,9 @@ def screen_stocks(config):
         )
         
         # Screening criteria summary
-        print("\nCompanies passing criteria by category:")
-        for criterion, count in criteria_counts.items():
-            print(f"- {criterion}: {count}/{len(companies)} companies ({count/len(companies)*100:.1f}%)")
+        print_criteria_breakdown(criteria_counts, len(companies))
         
         logger.info(f"Found {len(filtered_companies)} companies passing screening criteria")
-        print(f"\nFound {len(filtered_companies)} companies passing screening criteria")
         
         # 결과 저장
         output_file = config.get("data_paths", {}).get("output_file", "data/processed/results.csv")
@@ -390,43 +371,19 @@ def screen_stocks(config):
             df.to_csv(output_file, index=False)
             ResultsFormatter(config).export_to_markdown(df, {"total_companies": len(df)})
             logger.info(f"Results saved to {output_file}")
-            print(f"Results saved to {output_file}")
             
-            # 결과 출력 - 상위 10개 회사만
-            print("\nTop companies passing screening criteria:")
-            print(f"{'TICKER':<6} {'NAME':<30} {'SCORE':<7} {'BAND':<12} {'Q EPS':<8} {'A EPS':<8} {'REV':<8} {'RS':<6} {'52W':<7} {'MKTCAP($M)':<12}")
-            print("-" * 114)
-            
-            for company in filtered_companies[:10]:
-                ticker = company.get('ticker', 'N/A')
-                name = company.get('name', 'Unknown')
-                if len(name) > 28:
-                    name = name[:25] + '...'
-                
-                q_eps = f"{company.get('quarterly_eps_growth', 0) * 100:.1f}%"
-                a_eps = f"{company.get('annual_eps_cagr', 0) * 100:.1f}%"
-                rev = f"{company.get('revenue_growth', 0) * 100:.1f}%"
-                margin = f"{company.get('profit_margin', 0) * 100:.1f}%"
-                score = f"{company.get('canslim_score', 0):.1f}"
-                band = company.get('score_band', 'N/A')
-                rs = f"{company.get('rs_rating', 0):.0f}"
-                near_high = f"{company.get('price_vs_52w_high', 0) * 100:.1f}%"
-                mktcap = f"${company.get('market_cap', 0) / 1000000:.1f}M"
-                
-                print(f"{ticker:<6} {name:<30} {score:<7} {band:<12} {q_eps:<8} {a_eps:<8} {rev:<8} {rs:<6} {near_high:<7} {mktcap:<12}")
-                
-            # 전체 결과 수가 10개 이상인 경우 추가 결과가 있음을 알려줌
-            if len(filtered_companies) > 10:
-                print(f"And {len(filtered_companies) - 10} more companies are not shown...")
+            # Rich 결과 테이블 출력
+            print_results_table(filtered_companies, len(filtered_companies))
+            print_saved_result(output_file)
         else:
             logger.warning("No companies passed the screening criteria")
-            print("\nNo companies passed the screening criteria. Consider relaxing your criteria in the active screener profile.")
             
             # 빈 결과 파일 생성
             with open(output_file, 'w') as f:
                 f.write("No companies passed the screening criteria.\n")
             ResultsFormatter(config).export_to_markdown(pd.DataFrame(), {"total_companies": 0})
-            print(f"Empty results file created at {output_file}")
+            print_results_table([], 0)
+            print_saved_result(output_file)
     
     except Exception as e:
         logger.error(f"Error during stock screening: {e}")
@@ -509,8 +466,8 @@ def main():
     parser.add_argument(
         "--mode",
         required=True,
-        choices=["download", "parse", "enrich", "leadership", "financials", "screen", "status", "update", "analyze"],
-        help="Operation mode: download SEC data, parse data, enrich data, screen stocks, inspect status, or update missing stages"
+        choices=["download", "parse", "enrich", "leadership", "financials", "screen", "status", "update", "analyze", "tv-export"],
+        help="Operation mode: download SEC data, parse data, enrich data, screen stocks, export TradingView artifacts, inspect status, or update missing stages"
     )
     
     parser.add_argument(
@@ -568,6 +525,12 @@ def main():
         collect_financial_data(config)
     elif args.mode == "screen":
         screen_stocks(config)
+    elif args.mode == "tv-export":
+        summary = export_tradingview_artifacts(config)
+        print("TradingView artifacts exported:")
+        print(f"- Watchlist: {summary['watchlist_file']}")
+        print(f"- Review plan: {summary['review_plan_file']}")
+        print(f"- Symbols: {', '.join(summary['symbols'])}")
     elif args.mode == "status":
         show_status(config)
     elif args.mode == "update":

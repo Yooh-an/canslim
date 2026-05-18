@@ -40,6 +40,7 @@ Run steps individually:
 ./screener parse
 ./screener enrich
 ./screener screen
+./screener tv-export
 ```
 
 For day-to-day use, either open the interactive terminal menu:
@@ -54,6 +55,7 @@ or inspect status/run missing stages from the CLI:
 python run_screener.py --mode status --config config/base.json --profile canslim_pure
 python run_screener.py --mode update --config config/base.json --profile canslim_watchlist
 python run_screener.py --mode analyze --ticker STRL --config config/base.json --profile canslim_pure
+python run_screener.py --mode tv-export --config config/base.json --profile canslim_pure
 ```
 
 Equivalent Python entrypoint:
@@ -137,6 +139,21 @@ Current configuration uses these top-level sections:
   "pattern_criteria": {}
 }
 ```
+
+## TradingView Export
+
+After running `screen`, export the current profile's candidates into TradingView-ready operation files:
+
+```bash
+python run_screener.py --mode tv-export --config config/base.json --profile canslim_pure
+```
+
+This writes two sibling files next to the profile result CSV:
+
+- `*_tradingview_watchlist.txt`: one uppercase ticker per line for watchlist import/MCP watchlist automation
+- `*_tradingview_review_plan.json`: sorted candidates, trade-plan levels, and suggested TradingView MCP actions for chart review, screenshots, and alerts
+
+The export intentionally does not replace the core SEC/yfinance scoring pipeline. It is an operating layer for final TradingView chart validation and alert setup.
 
 ## Free SEC 13F Institutional Data
 

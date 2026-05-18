@@ -8,7 +8,7 @@ import pytest
 import run_screener
 
 
-def test_runner_accepts_status_update_and_analyze_modes(monkeypatch):
+def test_runner_accepts_status_update_analyze_and_tv_export_modes(monkeypatch):
     captured = []
 
     def fake_main():
@@ -32,6 +32,12 @@ def test_runner_accepts_status_update_and_analyze_modes(monkeypatch):
 
     assert "analyze" in captured[2]
     assert "STRL" in captured[2]
+
+    monkeypatch.setattr(sys, "argv", ["run_screener.py", "--mode", "tv-export", "--config", "config/base.json", "--profile", "canslim_pure"])
+    run_screener.main()
+
+    assert "tv-export" in captured[3]
+    assert "canslim_pure" in captured[3]
 
 
 def test_runner_rejects_unknown_mode(monkeypatch):
