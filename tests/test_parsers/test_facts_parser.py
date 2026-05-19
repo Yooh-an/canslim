@@ -197,6 +197,49 @@ class TestXBRLFactsParser(unittest.TestCase):
 
         self.assertAlmostEqual(metrics["profit_margin"], 0.10)
 
+    def test_profit_margin_prefers_operating_income_when_available(self):
+        """Configured profit_margin represents operating margin when operating income is available."""
+        us_gaap_facts = {
+            "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                "units": {"USD": [{"form": "10-Q", "fy": 2026, "fp": "Q1", "start": "2026-01-01", "end": "2026-03-31", "filed": "2026-05-01", "val": 200}]}
+            },
+            "NetIncomeLoss": {
+                "units": {"USD": [{"form": "10-Q", "fy": 2026, "fp": "Q1", "start": "2026-01-01", "end": "2026-03-31", "filed": "2026-05-01", "val": 20}]}
+            },
+            "OperatingIncomeLoss": {
+                "units": {"USD": [{"form": "10-Q", "fy": 2026, "fp": "Q1", "start": "2026-01-01", "end": "2026-03-31", "filed": "2026-05-01", "val": 50}]}
+            },
+        }
+        metrics = {}
+
+        self.parser._extract_revenue_metrics(us_gaap_facts, metrics)
+        self.parser._extract_income_metrics(us_gaap_facts, metrics)
+        self.parser._calculate_derived_metrics(metrics)
+
+        self.assertAlmostEqual(metrics["profit_margin"], 0.25)
+        self.assertEqual(metrics["profit_margin_source"], "operating_income")
+
+    def test_roe_uses_average_equity_when_prior_equity_available(self):
+        """ROE should use average equity rather than only ending equity when possible."""
+        us_gaap_facts = {
+            "NetIncomeLoss": {
+                "units": {"USD": [{"form": "10-K", "fy": 2025, "fp": "FY", "start": "2025-01-01", "end": "2025-12-31", "filed": "2026-02-15", "val": 120}]}
+            },
+            "StockholdersEquity": {
+                "units": {"USD": [
+                    {"form": "10-K", "fy": 2024, "fp": "FY", "end": "2024-12-31", "filed": "2025-02-15", "val": 180},
+                    {"form": "10-K", "fy": 2025, "fp": "FY", "end": "2025-12-31", "filed": "2026-02-15", "val": 220},
+                ]}
+            },
+        }
+        metrics = {}
+
+        self.parser._extract_income_metrics(us_gaap_facts, metrics)
+        self.parser._extract_balance_sheet_metrics(us_gaap_facts, metrics)
+        self.parser._calculate_derived_metrics(metrics)
+
+        self.assertAlmostEqual(metrics["roe"], 120 / 200)
+
     def test_revenue_extraction_prefers_newest_available_tag(self):
         """A stale high-priority revenue tag should not override a newer revenue tag."""
         us_gaap_facts = {

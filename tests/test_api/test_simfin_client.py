@@ -18,16 +18,18 @@ COMPACT_PAYLOAD = [
             "Report Date",
             "Revenue",
             "Net Income",
+            "Operating Income",
             "EPS (Diluted)",
             "Total Debt",
             "Total Equity",
         ],
         "data": [
-            ["TEST", 2025, "q1", "2025-03-31", 100, 10, 1.00, 50, 200],
-            ["TEST", 2026, "q1", "2026-03-31", 130, 13, 1.30, 60, 240],
-            ["TEST", 2023, "fy", "2023-12-31", 300, 30, 2.00, 45, 180],
-            ["TEST", 2024, "fy", "2024-12-31", 400, 44, 2.40, 50, 220],
-            ["TEST", 2025, "fy", "2025-12-31", 500, 60, 3.00, 60, 240],
+            ["TEST", 2025, "q1", "2025-03-31", 100, 10, 15, 1.00, 50, 200],
+            ["TEST", 2026, "q1", "2026-03-31", 130, 13, 26, 1.30, 60, 240],
+            ["TEST", 2022, "fy", "2022-12-31", 250, 25, 30, 1.50, 40, 160],
+            ["TEST", 2023, "fy", "2023-12-31", 300, 30, 36, 2.00, 45, 180],
+            ["TEST", 2024, "fy", "2024-12-31", 400, 44, 52, 2.40, 50, 220],
+            ["TEST", 2025, "fy", "2025-12-31", 500, 60, 75, 3.00, 60, 240],
         ],
     }
 ]
@@ -58,9 +60,10 @@ def test_get_fundamental_metrics_derives_canslim_fields_and_caches(mock_get, tmp
 
     assert metrics["quarterly_eps_growth"] == pytest.approx(0.30)
     assert metrics["revenue_growth"] == pytest.approx(0.30)
-    assert metrics["annual_eps_cagr"] == pytest.approx((3.0 / 2.0) ** 0.5 - 1)
-    assert metrics["profit_margin"] == pytest.approx(0.10)
-    assert metrics["roe"] == pytest.approx(60 / 240)
+    assert metrics["annual_eps_cagr"] == pytest.approx((3.0 / 1.5) ** (1 / 3) - 1)
+    assert metrics["profit_margin"] == pytest.approx(0.20)
+    assert metrics["profit_margin_source"] == "operating_income"
+    assert metrics["roe"] == pytest.approx(60 / ((240 + 220) / 2))
     assert metrics["debt_to_equity"] == pytest.approx(60 / 240)
     assert metrics["financial_data_source"] == "simfin"
     mock_get.assert_called_once()
@@ -69,6 +72,27 @@ def test_get_fundamental_metrics_derives_canslim_fields_and_caches(mock_get, tmp
     cached = client.get_fundamental_metrics("TEST")
     assert cached["quarterly_eps_growth"] == pytest.approx(0.30)
     mock_get.assert_called_once()
+
+
+def test_simfin_annual_eps_cagr_requires_at_least_three_years(tmp_path):
+    client = SimFinClient(
+        {
+            "optional_api_keys": {"simfin_api_key": "test-key"},
+            "data_paths": {"raw_data_dir": str(tmp_path)},
+        }
+    )
+    payload = [{
+        "found": True,
+        "columns": ["Ticker", "Fiscal Year", "Fiscal Period", "Report Date", "EPS (Diluted)"],
+        "data": [
+            ["TEST", 2024, "fy", "2024-12-31", 2.0],
+            ["TEST", 2025, "fy", "2025-12-31", 3.0],
+        ],
+    }]
+
+    metrics = client.metrics_from_payload(payload)
+
+    assert "annual_eps_cagr" not in metrics
 
 
 def test_parse_compact_payload_accepts_wrapped_data_shape(tmp_path):

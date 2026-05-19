@@ -236,6 +236,7 @@ class SimFinClient:
         eps_col = self._find_column(column_map, ["eps_diluted", "diluted_eps", "earnings_per_share_diluted", "eps_basic", "earnings_per_share_basic", "eps"])
         revenue_col = self._find_column(column_map, ["revenue", "sales"])
         income_col = self._find_column(column_map, ["net_income", "net_income_loss", "profit_loss"])
+        operating_income_col = self._find_column(column_map, ["operating_income", "operating_income_loss", "operating_profit"])
         debt_col = self._find_column(column_map, ["total_debt", "debt"])
         equity_col = self._find_column(column_map, ["total_equity", "equity", "shareholders_equity"])
         roe_col = self._find_column(column_map, ["roe", "return_on_equity"])
@@ -263,9 +264,12 @@ class SimFinClient:
             balance_row = latest
         if latest is not None:
             revenue = self._value(latest, revenue_col)
+            operating_income = self._value(latest, operating_income_col)
             income = self._value(latest, income_col)
-            if revenue and revenue > 0 and income is not None:
-                metrics["profit_margin"] = income / revenue
+            margin_income = operating_income if operating_income is not None else income
+            if revenue and revenue > 0 and margin_income is not None:
+                metrics["profit_margin"] = margin_income / revenue
+                metrics["profit_margin_source"] = "operating_income" if operating_income is not None else "net_income"
         if balance_row is not None:
             income_for_roe = self._value(balance_row, income_col)
             equity = self._value(balance_row, equity_col)
@@ -274,7 +278,9 @@ class SimFinClient:
             if roe is not None:
                 metrics["roe"] = self._normalize_ratio(roe)
             elif equity and equity > 0 and income_for_roe is not None:
-                metrics["roe"] = income_for_roe / equity
+                previous_equity = self._previous_annual_equity(annual, balance_row, equity_col)
+                equity_base = (equity + previous_equity) / 2 if previous_equity and previous_equity > 0 else equity
+                metrics["roe"] = income_for_roe / equity_base
             debt_to_equity = self._value(balance_row, de_col)
             if debt_to_equity is not None:
                 metrics["debt_to_equity"] = self._normalize_ratio(debt_to_equity)
@@ -313,6 +319,17 @@ class SimFinClient:
             return None
         return df.iloc[0]
 
+    def _previous_annual_equity(self, annual: pd.DataFrame, current_row: pd.Series, equity_col: Optional[str]) -> Optional[float]:
+        if annual.empty or not equity_col:
+            return None
+        current_year = current_row.get("_year")
+        if pd.isna(current_year):
+            return None
+        previous = annual[annual["_year"] < current_year]
+        if previous.empty:
+            return None
+        return self._value(previous.iloc[0], equity_col)
+
     @staticmethod
     def _value(row: pd.Series, column: Optional[str]) -> Optional[float]:
         if not column or column not in row:
@@ -349,12 +366,11 @@ class SimFinClient:
         if len(rows) < 2:
             return None
         latest = rows.iloc[0]
-        # Prefer a 2-3 year lookback; use the oldest positive row available.
-        base = rows.iloc[min(len(rows) - 1, 2)]
-        years = int(latest["_year"] - base["_year"])
-        if years <= 0:
-            return None
-        return float(latest[value_col] / base[value_col]) ** (1 / years) - 1
+        for _, base in rows.iloc[1:].iterrows():
+            years = int(latest["_year"] - base["_year"])
+            if years >= 3:
+                return float(latest[value_col] / base[value_col]) ** (1 / years) - 1
+        return None
 
     @staticmethod
     def _normalize_ratio(value: float) -> float:

@@ -653,34 +653,59 @@ class XBRLFactsParser:
         elif quarterly:
             logger.debug(f"매출 YoY 계산에 필요한 같은 회계분기 데이터 부족: {len(quarterly)}개")
     
+    def _best_flow_data_for_tags(
+        self,
+        us_gaap_facts: Dict[str, Any],
+        tags: List[str],
+        unit_types: List[str],
+    ) -> Optional[Tuple[pd.Timestamp, List[Dict[str, Any]], List[Dict[str, Any]]]]:
+        best_data = None
+        for tag in tags:
+            tag_data = us_gaap_facts.get(tag)
+            if not tag_data:
+                continue
+            quarterly = self._quarterly_flow_series(tag_data, unit_types)
+            annual = self._annual_series(tag_data, unit_types)
+            if quarterly or annual:
+                latest_end = self._latest_end_key(quarterly + annual)
+                if best_data is None or latest_end > best_data[0]:
+                    best_data = (latest_end, quarterly, annual)
+        return best_data
+
     def _extract_income_metrics(self, us_gaap_facts: Dict[str, Any], metrics: Dict[str, Any]) -> None:
-        """Extract Net Income metrics from us-gaap facts."""
-        # Try multiple tag names for Net Income
-        income_tags = [
+        """Extract operating income and net income metrics from us-gaap facts."""
+        operating_income_tags = [
+            "OperatingIncomeLoss",
+            "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+        ]
+        net_income_tags = [
             "NetIncomeLoss",
             "ProfitLoss",
             "NetIncome",
             "NetIncomeLossAvailableToCommonStockholdersBasic",
             "NetIncomeLossAttributableToParent",
         ]
-        best_data = None
-        for tag in income_tags:
-            if tag in us_gaap_facts:
-                tag_data = us_gaap_facts[tag]
-                
-                # Net Income is typically in USD
-                if 'USD' in tag_data.get('units', {}):
-                    quarterly = self._quarterly_flow_series(tag_data, ["USD"])
-                    annual = self._annual_series(tag_data, ["USD"])
-                    if quarterly or annual:
-                        latest_end = self._latest_end_key(quarterly + annual)
-                        if best_data is None or latest_end > best_data[0]:
-                            best_data = (latest_end, quarterly, annual)
 
-        if not best_data:
+        operating_data = self._best_flow_data_for_tags(us_gaap_facts, operating_income_tags, ["USD"])
+        if operating_data:
+            latest_end, quarterly, annual = operating_data
+            if not self._is_stale_concept(latest_end, metrics.get('_latest_fact_end')):
+                if quarterly:
+                    metrics['_quarterly_operating_income_values'] = [
+                        (record['period_key'], record['end'], record['val'])
+                        for record in quarterly
+                    ]
+                if annual:
+                    metrics['_annual_operating_income_values'] = [
+                        (record['fy'], record['end'], record['val'])
+                        for record in annual
+                    ]
+
+        net_data = self._best_flow_data_for_tags(us_gaap_facts, net_income_tags, ["USD"])
+        if not net_data:
             return
 
-        latest_end, quarterly, annual = best_data
+        latest_end, quarterly, annual = net_data
         if self._is_stale_concept(latest_end, metrics.get('_latest_fact_end')):
             logger.debug("Skipping stale income facts")
             return
@@ -697,8 +722,8 @@ class XBRLFactsParser:
             ]
     
     @staticmethod
-    def _latest_instant_value(us_gaap_facts: Dict[str, Any], tags: List[str]) -> Optional[Tuple[str, float]]:
-        """Return the newest instant balance-sheet value for any of the supplied tags."""
+    def _instant_values(us_gaap_facts: Dict[str, Any], tags: List[str]) -> List[Tuple[str, float]]:
+        """Return sorted instant balance-sheet values for any of the supplied tags."""
         values: List[Tuple[pd.Timestamp, str, float]] = []
         for tag in tags:
             tag_data = us_gaap_facts.get(tag)
@@ -716,11 +741,14 @@ class XBRLFactsParser:
                 except Exception:
                     continue
 
-        if not values:
-            return None
         values.sort(key=lambda x: (x[0], x[1]), reverse=True)
-        latest_end, _, latest_value = values[0]
-        return latest_end.date().isoformat(), latest_value
+        return [(end.date().isoformat(), value) for end, _, value in values]
+
+    @staticmethod
+    def _latest_instant_value(us_gaap_facts: Dict[str, Any], tags: List[str]) -> Optional[Tuple[str, float]]:
+        """Return the newest instant balance-sheet value for any of the supplied tags."""
+        values = XBRLFactsParser._instant_values(us_gaap_facts, tags)
+        return values[0] if values else None
 
     def _extract_debt_metrics(self, us_gaap_facts: Dict[str, Any], metrics: Dict[str, Any]) -> None:
         """Extract interest-bearing debt, avoiding total liabilities as a debt proxy."""
@@ -783,49 +811,69 @@ class XBRLFactsParser:
             _, value = liabilities
             metrics['liabilities'] = value
 
-        equity = self._latest_instant_value(
-            us_gaap_facts,
-            [
-                "StockholdersEquity",
-                "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
-            ],
-        )
-        if equity is not None:
-            _, value = equity
+        equity_tags = [
+            "StockholdersEquity",
+            "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+        ]
+        equity_values = self._instant_values(us_gaap_facts, equity_tags)
+        if equity_values:
+            _, value = equity_values[0]
             metrics['equity'] = value
+            metrics['_equity_values'] = equity_values
 
         self._extract_debt_metrics(us_gaap_facts, metrics)
     
     def _calculate_derived_metrics(self, metrics: Dict[str, Any]) -> None:
         """Calculate derived metrics from extracted financial data."""
-        # Calculate Profit Margin using like-for-like periods.
-        if '_quarterly_revenue_values' in metrics and '_quarterly_income_values' in metrics:
+        # Calculate profit margin using like-for-like periods. Prefer operating
+        # income to match the screener's operating-margin criterion; fall back to
+        # net income when operating income is unavailable.
+        income_sources = [
+            ("_quarterly_operating_income_values", "operating_income"),
+            ("_quarterly_income_values", "net_income"),
+        ]
+        if '_quarterly_revenue_values' in metrics:
             revenue_dict = {period: val for period, _, val in metrics['_quarterly_revenue_values']}
-            income_dict = {period: val for period, _, val in metrics['_quarterly_income_values']}
-            common_periods = set(revenue_dict.keys()) & set(income_dict.keys())
-            if common_periods:
-                latest_period = sorted(common_periods, reverse=True)[0]
-                latest_revenue = revenue_dict[latest_period]
-                latest_income = income_dict[latest_period]
-                if latest_revenue > 0:
-                    metrics['profit_margin'] = latest_income / latest_revenue
-        elif '_annual_revenue_values' in metrics and '_annual_income_values' in metrics:
+            for income_key, source in income_sources:
+                if income_key not in metrics:
+                    continue
+                income_dict = {period: val for period, _, val in metrics[income_key]}
+                common_periods = set(revenue_dict.keys()) & set(income_dict.keys())
+                if common_periods:
+                    latest_period = sorted(common_periods, reverse=True)[0]
+                    latest_revenue = revenue_dict[latest_period]
+                    latest_income = income_dict[latest_period]
+                    if latest_revenue > 0:
+                        metrics['profit_margin'] = latest_income / latest_revenue
+                        metrics['profit_margin_source'] = source
+                        break
+        elif '_annual_revenue_values' in metrics:
             revenue_dict = {year: val for year, _, val in metrics['_annual_revenue_values']}
-            income_dict = {year: val for year, _, val in metrics['_annual_income_values']}
-            common_years = set(revenue_dict.keys()) & set(income_dict.keys())
-            if common_years:
-                latest_year = max(common_years)
-                latest_revenue = revenue_dict[latest_year]
-                latest_income = income_dict[latest_year]
-                if latest_revenue > 0:
-                    metrics['profit_margin'] = latest_income / latest_revenue
+            for income_key, source in [
+                ("_annual_operating_income_values", "operating_income"),
+                ("_annual_income_values", "net_income"),
+            ]:
+                if income_key not in metrics:
+                    continue
+                income_dict = {year: val for year, _, val in metrics[income_key]}
+                common_years = set(revenue_dict.keys()) & set(income_dict.keys())
+                if common_years:
+                    latest_year = max(common_years)
+                    latest_revenue = revenue_dict[latest_year]
+                    latest_income = income_dict[latest_year]
+                    if latest_revenue > 0:
+                        metrics['profit_margin'] = latest_income / latest_revenue
+                        metrics['profit_margin_source'] = source
+                        break
         
-        # Calculate ROE
+        # Calculate ROE using average equity when two balance-sheet values exist.
         if 'equity' in metrics and '_annual_income_values' in metrics:
             annual_income = metrics['_annual_income_values']
-            if annual_income and metrics['equity'] > 0:
+            equity_values = [value for _, value in metrics.get('_equity_values', []) if value and value > 0]
+            if annual_income and equity_values:
                 latest_income = annual_income[0][2]
-                metrics['roe'] = latest_income / metrics['equity']
+                equity_base = sum(equity_values[:2]) / 2 if len(equity_values) >= 2 else equity_values[0]
+                metrics['roe'] = latest_income / equity_base
         
         # Calculate Debt-to-Equity from interest-bearing debt, not total liabilities.
         if 'equity' in metrics and 'debt' in metrics and metrics['equity'] > 0:
