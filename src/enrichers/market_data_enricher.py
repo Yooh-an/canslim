@@ -8,6 +8,7 @@ import os
 import json
 import requests
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import numpy as np
@@ -52,12 +53,22 @@ class MarketDataEnricher:
             "financial_data"
         )
         self.market_data_dir = os.path.join(self.financial_data_dir, "market_data")
+        raw_data_dir = data_paths.get("raw_data_dir", "data/raw")
         self.price_cache_dir = os.path.join(
-            data_paths.get("raw_data_dir", "data/raw"),
+            raw_data_dir,
             "price_history",
         )
+        self.sec_metadata_dir = os.path.join(raw_data_dir, "sec_company_metadata")
+        self._ticker_cik_lookup_cache = None
+        self._company_context_by_ticker = {}
+        self._yfinance_rate_limited = False
+        self._yfinance_rate_limit_warning_logged = False
+        self._yfinance_info_rate_limited = False
+        self._yfinance_info_rate_limit_warning_logged = False
+        self._bulk_yfinance_fetch = False
         Path(self.market_data_dir).mkdir(parents=True, exist_ok=True)
         Path(self.price_cache_dir).mkdir(parents=True, exist_ok=True)
+        Path(self.sec_metadata_dir).mkdir(parents=True, exist_ok=True)
 
     def _progress(self, message: str) -> None:
         """Print progress even when logging handlers are not attached to this module."""
@@ -108,6 +119,18 @@ class MarketDataEnricher:
         yf_market_data = self._fetch_yfinance_market_data(tickers_to_fetch)
         for ticker, data in yf_market_data.items():
             market_data.setdefault(ticker, {}).update(data)
+
+        self._company_context_by_ticker = companies_by_ticker
+        tickers_needing_sec_metadata = [
+            ticker for ticker, company in companies_by_ticker.items()
+            if not self._has_sec_industry_metadata(company)
+            and not self._has_sec_industry_metadata(market_data.get(ticker, {}))
+        ]
+        sec_metadata = self._fetch_sec_metadata_for_tickers(tickers_needing_sec_metadata)
+        for ticker, data in sec_metadata.items():
+            market_data.setdefault(ticker, {}).update(data)
+            self._save_market_data_file(ticker, market_data[ticker])
+
         self._progress("Calculating leadership, RS, volume, and pattern metrics")
         leadership_data = self._calculate_leadership_metrics(companies)
         for ticker, data in leadership_data.items():
@@ -183,6 +206,10 @@ class MarketDataEnricher:
                     "valid_breakout",
                     "sector",
                     "industry",
+                    "sic",
+                    "sicDescription",
+                    "entity_type",
+                    "filer_category",
                     "institutional_ownership",
                     "institutional_holders",
                     "industry_rs_rank",
@@ -386,29 +413,61 @@ class MarketDataEnricher:
             self.config.get("download_settings", {}).get("max_workers", 4),
         )
         max_workers = max(1, min(int(max_workers), 12))
-        self._progress(f"Using {max_workers} workers for yfinance market-data lookups")
+        use_info_fallback = self.config.get("market_data", {}).get("use_yfinance_info_fallback", False)
+        if use_info_fallback:
+            self._progress("Using sequential yfinance lookups because info fallback is enabled")
+            previous_bulk_state = self._bulk_yfinance_fetch
+            self._bulk_yfinance_fetch = True
+            try:
+                for index, ticker in enumerate(unique_tickers, start=1):
+                    if self._yfinance_rate_limited:
+                        self._progress(
+                            f"Stopping yfinance market-data lookups after rate limit; skipped {len(unique_tickers) - index + 1} tickers"
+                        )
+                        break
+                    try:
+                        if index == 1 or index % 10 == 0:
+                            self._progress(f"Yfinance market-cap lookup {index}/{len(unique_tickers)}: {ticker}")
+                        data = self._fetch_single_yfinance_ticker(ticker)
+                        if data:
+                            market_data[ticker] = data
+                            self._save_market_data_file(ticker, data)
+                        if index % 25 == 0:
+                            logger.info(f"Fetched yfinance data for {index}/{len(unique_tickers)} tickers")
+                            self._progress(f"Fetched yfinance market-cap data for {index}/{len(unique_tickers)} tickers")
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch yfinance data for {ticker}: {e}")
+                        self._progress(f"Failed yfinance market-cap lookup {index}/{len(unique_tickers)}: {ticker} ({e})")
+            finally:
+                self._bulk_yfinance_fetch = previous_bulk_state
+        else:
+            self._progress(f"Using {max_workers} workers for yfinance market-data lookups")
+            previous_bulk_state = self._bulk_yfinance_fetch
+            self._bulk_yfinance_fetch = True
+            try:
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    future_to_ticker = {
+                        executor.submit(self._fetch_single_yfinance_ticker, ticker): ticker
+                        for ticker in unique_tickers
+                    }
+                    for index, future in enumerate(as_completed(future_to_ticker), start=1):
+                        ticker = future_to_ticker[future]
+                        try:
+                            if index == 1 or index % 10 == 0:
+                                self._progress(f"Yfinance market-cap lookup {index}/{len(unique_tickers)}: {ticker}")
+                            data = future.result()
+                            if data:
+                                market_data[ticker] = data
+                                self._save_market_data_file(ticker, data)
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_ticker = {
-                executor.submit(self._fetch_single_yfinance_ticker, ticker): ticker
-                for ticker in unique_tickers
-            }
-            for index, future in enumerate(as_completed(future_to_ticker), start=1):
-                ticker = future_to_ticker[future]
-                try:
-                    if index == 1 or index % 10 == 0:
-                        self._progress(f"Yfinance market-cap lookup {index}/{len(unique_tickers)}: {ticker}")
-                    data = future.result()
-                    if data:
-                        market_data[ticker] = data
-                        self._save_market_data_file(ticker, data)
-
-                    if index % 25 == 0:
-                        logger.info(f"Fetched yfinance data for {index}/{len(unique_tickers)} tickers")
-                        self._progress(f"Fetched yfinance market-cap data for {index}/{len(unique_tickers)} tickers")
-                except Exception as e:
-                    logger.warning(f"Failed to fetch yfinance data for {ticker}: {e}")
-                    self._progress(f"Failed yfinance market-cap lookup {index}/{len(unique_tickers)}: {ticker} ({e})")
+                            if index % 25 == 0:
+                                logger.info(f"Fetched yfinance data for {index}/{len(unique_tickers)} tickers")
+                                self._progress(f"Fetched yfinance market-cap data for {index}/{len(unique_tickers)} tickers")
+                        except Exception as e:
+                            logger.warning(f"Failed to fetch yfinance data for {ticker}: {e}")
+                            self._progress(f"Failed yfinance market-cap lookup {index}/{len(unique_tickers)}: {ticker} ({e})")
+            finally:
+                self._bulk_yfinance_fetch = previous_bulk_state
 
         logger.info(f"Fetched yfinance market data for {len(market_data)} tickers")
         self._progress(f"Fetched yfinance market data for {len(market_data)} tickers")
@@ -436,6 +495,17 @@ class MarketDataEnricher:
         }
         tickers = list(ticker_to_company.keys())
         cached_market_data = self._load_market_data_files(self.market_data_dir)
+        self._company_context_by_ticker.update(ticker_to_company)
+        tickers_needing_sec_metadata = [
+            ticker for ticker in tickers
+            if not self._has_sec_industry_metadata(ticker_to_company.get(ticker, {}))
+            and not self._has_sec_industry_metadata(cached_market_data.get(ticker, {}))
+        ]
+        sec_metadata = self._fetch_sec_metadata_for_tickers(tickers_needing_sec_metadata)
+        for ticker, data in sec_metadata.items():
+            cached_market_data.setdefault(ticker, {}).update(data)
+            self._save_market_data_file(ticker, cached_market_data[ticker])
+
         benchmark = market_data_config.get("leadership_benchmark", "SPY")
         period = market_data_config.get("leadership_period", "15mo")
         chunk_size = market_data_config.get("leadership_chunk_size", 100)
@@ -953,10 +1023,23 @@ class MarketDataEnricher:
     @staticmethod
     def _industry_group_for_company(company: Dict[str, Any]) -> str:
         return (
-            str(company.get("industry") or "").strip()
+            str(company.get("sicDescription") or "").strip()
+            or str(company.get("sic_description") or "").strip()
+            or str(company.get("industry") or "").strip()
             or str(company.get("sector") or "").strip()
             or str(company.get("sic") or "").strip()
             or str(company.get("category") or "").strip()
+        )
+
+    def _has_industry_group_metadata(self, company: Dict[str, Any]) -> bool:
+        return bool(self._industry_group_for_company(company or {}))
+
+    @staticmethod
+    def _has_sec_industry_metadata(company: Dict[str, Any]) -> bool:
+        company = company or {}
+        return bool(
+            str(company.get("sicDescription") or "").strip()
+            or str(company.get("sic_description") or "").strip()
         )
 
     @staticmethod
@@ -1012,9 +1095,25 @@ class MarketDataEnricher:
             if shares:
                 data["shares_outstanding"] = int(shares)
 
-        use_info_fallback = self.config.get("market_data", {}).get("use_yfinance_info_fallback", False)
+        market_data_config = self.config.get("market_data", {})
+        use_info_fallback = market_data_config.get("use_yfinance_info_fallback", False)
+        if self._yfinance_rate_limited or self._yfinance_info_rate_limited:
+            use_info_fallback = False
         if use_info_fallback:
-            info = yf_ticker.get_info()
+            try:
+                info = yf_ticker.get_info()
+            except Exception as exc:
+                if self._is_yfinance_rate_limit_error(exc):
+                    self._yfinance_info_rate_limited = True
+                    if not self._yfinance_info_rate_limit_warning_logged:
+                        logger.warning(
+                            "Yahoo Finance info endpoint is rate-limited; pausing get_info() for the rest of this enrichment run. "
+                            "Continuing with fast_info and SEC company metadata."
+                        )
+                        self._yfinance_info_rate_limit_warning_logged = True
+                else:
+                    logger.warning(f"Failed to fetch yfinance info for {ticker}: {exc}")
+                info = {}
             market_cap = info.get("marketCap")
             current_price = info.get("currentPrice") or info.get("regularMarketPrice")
             shares = info.get("sharesOutstanding") or info.get("impliedSharesOutstanding")
@@ -1036,16 +1135,145 @@ class MarketDataEnricher:
             if "institutional_ownership" in data or "institutional_holders" in data:
                 data["institutional_data_source"] = "yfinance_info"
 
+        if not self._has_industry_group_metadata(data):
+            sec_metadata = self._fetch_sec_company_metadata_for_ticker(ticker)
+            if sec_metadata:
+                data.update(sec_metadata)
+
         return data if len(data) > 3 else {}
 
+    def _fetch_sec_metadata_for_tickers(self, tickers: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Fetch/cache SEC company metadata for tickers missing industry group data.
+
+        Yahoo's quoteSummary endpoint is aggressively rate-limited.  SEC's
+        submissions endpoint provides stable SIC descriptions, which are good
+        enough to build an industry-group ranking fallback when Yahoo sector or
+        industry metadata is unavailable.
+        """
+        unique_tickers = [ticker for ticker in dict.fromkeys(tickers) if ticker]
+        if not unique_tickers:
+            return {}
+
+        self._progress(f"Fetching SEC company metadata for {len(unique_tickers)} tickers missing industry data")
+        metadata: Dict[str, Dict[str, Any]] = {}
+        delay = float(self.config.get("sec_api", {}).get("rate_limit_delay", 0.1) or 0)
+        for index, ticker in enumerate(unique_tickers, start=1):
+            data = self._fetch_sec_company_metadata_for_ticker(ticker)
+            if data:
+                metadata[ticker] = data
+            if delay > 0 and index < len(unique_tickers):
+                time.sleep(delay)
+        self._progress(f"Fetched SEC company metadata for {len(metadata)}/{len(unique_tickers)} tickers")
+        return metadata
+
+    def _fetch_sec_company_metadata_for_ticker(self, ticker: str) -> Dict[str, Any]:
+        cik = self._cik_for_ticker(ticker)
+        if not cik:
+            return {}
+        return self._fetch_sec_company_metadata_by_cik(cik, ticker=ticker)
+
+    def _cik_for_ticker(self, ticker: str) -> Optional[str]:
+        normalized = self._normalize_yahoo_ticker(ticker).upper()
+        company = self._company_context_by_ticker.get(normalized) or self._company_context_by_ticker.get(ticker)
+        if company and company.get("cik"):
+            return str(company.get("cik")).zfill(10)
+
+        lookup = self._load_ticker_cik_lookup()
+        cik = lookup.get(normalized)
+        return str(cik).zfill(10) if cik else None
+
+    def _load_ticker_cik_lookup(self) -> Dict[str, str]:
+        if self._ticker_cik_lookup_cache is not None:
+            return self._ticker_cik_lookup_cache
+
+        lookup: Dict[str, str] = {}
+        mapping_path = self.config.get("data_paths", {}).get("cik_ticker_mapping")
+        if mapping_path and os.path.exists(mapping_path):
+            try:
+                mapping_df = pd.read_csv(mapping_path, dtype={"ticker": str, "cik": str})
+                for _, row in mapping_df.iterrows():
+                    ticker = self._normalize_yahoo_ticker(row.get("ticker", "")).upper()
+                    cik = row.get("cik")
+                    if ticker and pd.notna(cik):
+                        lookup[ticker] = str(cik).zfill(10)
+            except Exception as exc:
+                logger.warning(f"Could not load CIK ticker mapping {mapping_path}: {exc}")
+
+        self._ticker_cik_lookup_cache = lookup
+        return lookup
+
+    def _fetch_sec_company_metadata_by_cik(self, cik: str, ticker: str = "") -> Dict[str, Any]:
+        cik_padded = str(cik).zfill(10)
+        cache_file = os.path.join(self.sec_metadata_dir, f"CIK{cik_padded}.json")
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, "r") as f:
+                    cached = json.load(f)
+                return self._normalize_sec_company_metadata(cached, ticker=ticker)
+            except Exception as exc:
+                logger.warning(f"Could not read SEC metadata cache {cache_file}: {exc}")
+
+        user_agent = self.config.get("sec_api", {}).get("user_agent")
+        if not user_agent:
+            return {}
+
+        url = f"https://data.sec.gov/submissions/CIK{cik_padded}.json"
+        try:
+            response = requests.get(url, headers={"User-Agent": user_agent}, timeout=15)
+            response.raise_for_status()
+            payload = response.json()
+            with open(cache_file, "w") as f:
+                json.dump(payload, f, indent=2)
+            return self._normalize_sec_company_metadata(payload, ticker=ticker)
+        except Exception as exc:
+            logger.warning(f"Failed to fetch SEC company metadata for {ticker or cik_padded}: {exc}")
+            return {}
+
     @staticmethod
-    def _safe_fast_info_get(fast_info: Any, key: str) -> Optional[float]:
+    def _normalize_sec_company_metadata(payload: Dict[str, Any], ticker: str = "") -> Dict[str, Any]:
+        if not payload:
+            return {}
+        data: Dict[str, Any] = {}
+        if ticker:
+            data["ticker"] = ticker
+        for source, target in [
+            ("sic", "sic"),
+            ("sicDescription", "sicDescription"),
+            ("entityType", "entity_type"),
+            ("category", "filer_category"),
+        ]:
+            value = payload.get(source)
+            if value not in (None, ""):
+                data[target] = value
+        if "sicDescription" in data:
+            data["industry_group"] = data["sicDescription"]
+            data["industry_data_source"] = "sec_submissions"
+        return data
+
+    @staticmethod
+    def _is_yfinance_rate_limit_error(exc: Exception) -> bool:
+        message = str(exc).lower()
+        error_name = exc.__class__.__name__.lower()
+        return "ratelimit" in error_name or "rate limited" in message or "too many requests" in message
+
+    def _safe_fast_info_get(self, fast_info: Any, key: str) -> Optional[float]:
         try:
             if hasattr(fast_info, "get"):
                 return fast_info.get(key)
             return fast_info[key]
-        except Exception:
+        except Exception as exc:
+            if self._is_yfinance_rate_limit_error(exc):
+                self._mark_yfinance_rate_limited("fast_info")
             return None
+
+    def _mark_yfinance_rate_limited(self, source: str) -> None:
+        self._yfinance_rate_limited = True
+        if not self._yfinance_rate_limit_warning_logged:
+            logger.warning(
+                f"Yahoo Finance {source} endpoint is rate-limited; stopping yfinance calls for this enrichment run. "
+                "Continuing with cached data and SEC company metadata."
+            )
+            self._yfinance_rate_limit_warning_logged = True
 
     def _save_market_data_file(self, ticker: str, data: Dict[str, Any]) -> None:
         safe_ticker = ticker.replace("/", "-")
