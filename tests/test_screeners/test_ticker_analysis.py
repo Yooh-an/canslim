@@ -212,6 +212,53 @@ def test_analyze_ticker_enriches_when_current_price_or_institutional_data_missin
     enricher.enrich_single_ticker_market_data.assert_called_once()
 
 
+def test_analyze_ticker_refreshes_stale_eps_from_local_sec_facts(tmp_path):
+    cfg = _config(tmp_path)
+    raw_dir = tmp_path / "raw"
+    company_facts_dir = raw_dir / "company_facts"
+    company_facts_dir.mkdir(parents=True)
+    cfg["data_paths"]["raw_data_dir"] = str(raw_dir)
+    cfg["data_paths"]["company_facts_dir"] = str(company_facts_dir)
+    company = {
+        **_company(),
+        "ticker": "AVGO",
+        "name": "Broadcom Inc.",
+        "cik": "1730168",
+        "quarterly_eps_growth": 4.357142857142857,
+        "quarterly_eps_latest": 1.50,
+        "quarterly_eps_year_ago": 0.28,
+        "quarterly_eps_period": "2026Q4",
+    }
+    (Path(cfg["data_paths"]["processed_data_dir"]) / "companies_list_enriched.json").write_text(json.dumps([company]))
+    (Path(cfg["data_paths"]["processed_data_dir"]) / "market_direction.json").write_text(json.dumps({"market_direction_status": "confirmed_uptrend"}))
+    (company_facts_dir / "CIK0001730168.json").write_text(json.dumps({
+        "cik": "1730168",
+        "entityName": "Broadcom Inc.",
+        "tickers": ["AVGO"],
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {
+                    "units": {
+                        "USD/shares": [
+                            {"form": "10-K", "fy": 2025, "fp": "FY", "frame": "CY2025", "start": "2024-11-04", "end": "2025-11-02", "filed": "2025-12-18", "val": 4.77},
+                            {"form": "10-K", "fy": 2022, "fp": "FY", "frame": "CY2022", "start": "2021-11-01", "end": "2022-10-30", "filed": "2024-12-20", "val": 2.65},
+                            {"form": "10-Q", "fy": 2025, "fp": "Q1", "start": "2024-11-04", "end": "2025-02-02", "filed": "2025-03-12", "val": 1.14},
+                            {"form": "10-Q", "fy": 2026, "fp": "Q1", "frame": "CY2025Q4", "start": "2025-11-03", "end": "2026-02-01", "filed": "2026-03-11", "val": 1.50},
+                        ]
+                    }
+                }
+            }
+        },
+    }))
+
+    result = analyze_ticker("AVGO", cfg)
+
+    assert result["quarterly_eps_period"] == "2026Q1"
+    assert result["quarterly_eps_latest"] == 1.50
+    assert result["quarterly_eps_year_ago"] == 1.14
+    assert result["quarterly_eps_growth"] == 1.50 / 1.14 - 1
+
+
 def test_analyze_ticker_uses_simfin_fallback_for_missing_fundamentals(tmp_path):
     cfg = _config(tmp_path)
     cfg["fundamental_data"] = {"enabled": True, "provider": "simfin"}

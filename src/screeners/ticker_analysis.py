@@ -12,6 +12,7 @@ import pandas as pd
 from src.collectors.institutional_collector import enrich_companies_with_13f_data
 from src.enrichers.fundamental_fallback import enrich_company_fundamentals
 from src.enrichers.market_data_enricher import MarketDataEnricher
+from src.parsers.facts_parser import XBRLFactsParser
 from src.screeners.candidate_filter import _evaluate_screening_candidate
 from src.screeners.canslim_scoring import calculate_canslim_score
 from src.screeners.trade_rules import add_trade_rules
@@ -60,6 +61,64 @@ def _load_companies(config: Mapping[str, Any]) -> list[Dict[str, Any]]:
                 companies_by_ticker.setdefault(ticker, company)
 
     return list(companies_by_ticker.values())
+
+
+SEC_REFRESH_FIELDS = [
+    "quarterly_eps_growth",
+    "quarterly_eps_latest",
+    "quarterly_eps_year_ago",
+    "quarterly_eps_period",
+    "annual_eps_cagr",
+    "annual_eps_latest",
+    "annual_eps_base",
+    "annual_eps_years",
+    "revenue_growth",
+    "revenue_latest",
+    "revenue_year_ago",
+    "revenue_period",
+    "profit_margin",
+    "assets",
+    "liabilities",
+    "equity",
+    "debt_current",
+    "debt_noncurrent",
+    "short_term_debt",
+    "debt",
+    "roe",
+    "debt_to_equity",
+    "liabilities_to_equity",
+]
+
+
+def _sec_facts_file_for_company(company: Mapping[str, Any], config: Mapping[str, Any]) -> Path | None:
+    cik = str(company.get("cik_padded") or company.get("cik") or "").strip()
+    if not cik:
+        return None
+    cik_padded = cik.zfill(10)
+    data_paths = config.get("data_paths", {})
+    candidates = [
+        Path(data_paths.get("company_facts_dir", "data/raw/company_facts")) / f"CIK{cik_padded}.json",
+        Path(data_paths.get("raw_data_dir", "data/raw")) / "submissions_extracted" / f"CIK{cik_padded}.json",
+    ]
+    return next((path for path in candidates if path.exists()), None)
+
+
+def _refresh_company_sec_fundamentals(company: Dict[str, Any], config: Mapping[str, Any]) -> Dict[str, Any]:
+    """Refresh one ticker's SEC fundamental metrics from local companyfacts cache."""
+    facts_file = _sec_facts_file_for_company(company, config)
+    if facts_file is None:
+        return company
+    metrics = XBRLFactsParser(dict(config)).process_company_file(str(facts_file))
+    if not metrics:
+        return company
+    refreshed = dict(company)
+    for field in SEC_REFRESH_FIELDS:
+        value = metrics.get(field)
+        if pd.notna(value):
+            refreshed[field] = value
+    if any(field in metrics for field in SEC_REFRESH_FIELDS):
+        refreshed["financial_data_source"] = "sec_companyfacts"
+    return refreshed
 
 
 def _needs_market_enrichment(company: Mapping[str, Any], config: Mapping[str, Any] | None = None) -> bool:
@@ -134,6 +193,7 @@ def analyze_ticker(ticker: str, config: Mapping[str, Any]) -> Dict[str, Any]:
     )
     if company is None:
         return {"found": False, "ticker": normalized}
+    company = _refresh_company_sec_fundamentals(dict(company), config)
     company = enrich_company_fundamentals(dict(company), dict(config))
     if _needs_market_enrichment(company, config) and config.get("market_data", {}).get("on_demand_ticker_enrichment", True):
         market_config = dict(config)
