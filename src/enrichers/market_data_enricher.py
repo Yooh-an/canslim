@@ -18,6 +18,7 @@ from src.api.sec_client import SECClient
 from src.collectors.insider_collector import enrich_companies_with_insider_data
 from src.collectors.institutional_collector import enrich_companies_with_13f_data
 from src.screeners.market_direction import analyze_market_direction
+from src.utils.security_classifier import apply_security_classification
 from src.utils.yahoo_finance import configure_yfinance_user_agent
 
 try:
@@ -39,6 +40,7 @@ class MarketDataEnricher:
             config: Application configuration
         """
         self.config = config
+        self.quiet = bool(config.get("_quiet", False))
         self.api_key = config.get("optional_api_keys", {}).get("fmp_api_key")
         
         logger.info("Using yfinance market data with SEC fallback")
@@ -61,7 +63,8 @@ class MarketDataEnricher:
     def _progress(self, message: str) -> None:
         """Print progress even when logging handlers are not attached to this module."""
         logger.info(message)
-        print(f"[enrich] {message}", flush=True)
+        if not self.quiet:
+            print(f"[enrich] {message}", flush=True)
     
     def enrich_companies_with_market_data(self, max_companies: int = 100) -> List[Dict]:
         """
@@ -100,14 +103,16 @@ class MarketDataEnricher:
         market_data = self._load_market_data_files(market_data_dir)
         tickers_to_fetch = [
             ticker for ticker in companies_by_ticker.keys()
-            if ticker not in market_data
+            if not market_data.get(ticker, {}).get("market_cap")
         ]
         self._progress(f"Loaded cached market data for {len(market_data)} tickers; {len(tickers_to_fetch)} tickers need yfinance lookup")
         yf_market_data = self._fetch_yfinance_market_data(tickers_to_fetch)
-        market_data.update(yf_market_data)
+        for ticker, data in yf_market_data.items():
+            market_data.setdefault(ticker, {}).update(data)
         self._progress("Calculating leadership, RS, volume, and pattern metrics")
         leadership_data = self._calculate_leadership_metrics(companies)
-        market_data.update(leadership_data)
+        for ticker, data in leadership_data.items():
+            market_data.setdefault(ticker, {}).update(data)
         
         # Enrich companies with market data
         enriched_count = 0
@@ -205,6 +210,11 @@ class MarketDataEnricher:
             if (i + 1) % 500 == 0:
                 self._progress(f"Applied market data to {i + 1}/{len(companies_to_enrich)} companies")
         
+        classification_settings = self.config.get("security_classification", {})
+        recent_listing_days = classification_settings.get("recent_listing_days", 730)
+        for company in companies:
+            apply_security_classification(company, recent_listing_days=recent_listing_days)
+
         logger.info(f"Enriched {enriched_count} companies with market data")
         self._progress(f"Enriched {enriched_count} companies with market data")
         
@@ -278,6 +288,11 @@ class MarketDataEnricher:
                 if field in metrics:
                     company[field] = metrics[field]
             updated += 1
+
+        classification_settings = self.config.get("security_classification", {})
+        recent_listing_days = classification_settings.get("recent_listing_days", 730)
+        for company in companies:
+            apply_security_classification(company, recent_listing_days=recent_listing_days)
 
         for output_file in [enriched_file, companies_list_file]:
             with open(output_file, "w") as f:
@@ -456,6 +471,63 @@ class MarketDataEnricher:
         logger.info(f"Calculated leadership metrics for {len(results)} tickers")
         self._progress(f"Calculated leadership metrics for {len(results)} tickers")
         return results
+
+    def enrich_single_ticker_market_data(self, company: Dict[str, Any]) -> Dict[str, Any]:
+        """Fetch/cache market, price, RS, and volume metrics for a single ticker.
+
+        This is used by single-ticker analysis so users do not need to rerun a
+        full-universe enrichment just to fill one newly mapped ticker.
+        """
+        output = dict(company)
+        ticker = self._normalize_yahoo_ticker(output.get("ticker", ""))
+        if not ticker:
+            return output
+
+        market_data = self._load_market_data_files(self.market_data_dir).get(ticker, {})
+        fetched_market = self._fetch_yfinance_market_data([ticker]).get(ticker, {})
+        market_data.update(fetched_market)
+
+        market_data_config = self.config.get("market_data", {})
+        period = market_data_config.get("leadership_period", "15mo")
+        chunk_size = market_data_config.get("leadership_chunk_size", 100)
+        histories = self._download_price_history([ticker], period, chunk_size)
+        history = histories.get(ticker)
+        benchmark_history = self._download_single_history(market_data_config.get("leadership_benchmark", "SPY"), period)
+        benchmark_close = self._history_series(benchmark_history, "Close")
+        if benchmark_close.empty:
+            benchmark_close = None
+
+        if history is not None and not history.empty:
+            metrics = self._calculate_single_leadership_metrics(history, benchmark_close)
+            close = self._history_series(history, "Close")
+            if not close.empty:
+                latest_close = float(close.iloc[-1])
+                metrics["current_price"] = latest_close
+                shares = market_data.get("shares_outstanding") or output.get("shares_outstanding")
+                if shares and not market_data.get("market_cap"):
+                    try:
+                        metrics["market_cap"] = int(latest_close * float(shares))
+                        metrics["market_cap_source"] = "price_history_x_shares"
+                    except (TypeError, ValueError):
+                        pass
+            market_data.update(metrics)
+
+        cached_market_data = self._load_market_data_files(self.market_data_dir)
+        ranking_pool = {
+            pool_ticker: dict(values)
+            for pool_ticker, values in cached_market_data.items()
+            if pd.notna(values.get("rs_score"))
+        }
+        if pd.notna(market_data.get("rs_score")):
+            ranking_pool[ticker] = dict(market_data)
+            self._add_percentile_ranks(ranking_pool, "rs_score", "rs_rating", scale=99)
+            if ticker in ranking_pool and "rs_rating" in ranking_pool[ticker]:
+                market_data["rs_rating"] = ranking_pool[ticker]["rs_rating"]
+
+        if market_data:
+            self._save_market_data_file(ticker, {**market_data, "ticker": ticker})
+            output.update(market_data)
+        return output
 
     def _prioritize_leadership_universe(self, companies: List[Dict[str, Any]], max_companies: Optional[int]) -> List[Dict[str, Any]]:
         """Limit free price-history downloads to the highest-value universe."""
@@ -1073,7 +1145,10 @@ def enrich_market_data(config, use_external_api: bool = False):
         needs_sec_client = (
             config.get("institutional_data", {}).get("enabled", False)
             and bool(config.get("institutional_data", {}).get("manager_ciks"))
-        ) or config.get("insider_data", {}).get("enabled", False)
+        ) or (
+            config.get("insider_data", {}).get("enabled", False)
+            and config.get("insider_data", {}).get("fetch_live", False)
+        )
         if needs_sec_client:
             user_agent = config.get("sec_api", {}).get("user_agent")
             rate_limit = config.get("sec_api", {}).get("rate_limit_delay", 0.1)

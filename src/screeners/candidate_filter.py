@@ -23,6 +23,18 @@ def _passes_max_threshold(value: Any, threshold: Any) -> bool:
     return pd.notna(value) and value <= threshold
 
 
+def _passes_security_profile_filter(company: Dict[str, Any], criteria: Dict[str, Any]) -> bool:
+    """Return True when company is allowed by optional security-profile filters."""
+    profile = company.get("security_profile", "standard")
+    include_profiles = criteria.get("include_security_profiles")
+    if include_profiles and profile not in include_profiles:
+        return False
+    exclude_profiles = criteria.get("exclude_security_profiles") or []
+    if profile in exclude_profiles:
+        return False
+    return True
+
+
 def _check_supply_demand(company: Dict[str, Any], criteria: Dict[str, Any]) -> bool:
     """Evaluate CANSLIM supply/demand using accumulation and optional breakout confirmation."""
     if not criteria.get("require_supply_demand", False):
@@ -101,6 +113,18 @@ def _check_institutional(company: Dict[str, Any], criteria: Dict[str, Any]) -> b
     if mode == "holders":
         return holders_ok
     return ownership_ok
+
+
+def _check_market_cap_or_liquidity(company: Dict[str, Any], criteria: Dict[str, Any], leadership_criteria: Dict[str, Any]) -> bool:
+    """Pass market-size floor using market cap when known, otherwise liquidity proxy."""
+    market_cap_threshold = criteria.get("min_market_cap", 0)
+    market_cap = company.get("market_cap")
+    if pd.notna(market_cap) and market_cap and market_cap > 0:
+        return _passes_min_threshold(market_cap, market_cap_threshold)
+    return _passes_min_threshold(
+        company.get("avg_dollar_volume_50d"),
+        leadership_criteria.get("avg_dollar_volume_min", 0),
+    )
 
 
 def _check_pattern(company: Dict[str, Any], criteria: Dict[str, Any]) -> bool:
@@ -205,6 +229,8 @@ def _evaluate_screening_candidate(
     """Evaluate one company and return overall pass plus per-criterion results."""
     if not all(key in company for key in ['ticker', 'name']):
         return False, {}
+    if not _passes_security_profile_filter(company, criteria):
+        return False, {}
 
     if any(key not in company for key in ["quarterly_eps_growth", "annual_eps_cagr", "revenue_growth", "profit_margin", "roe"]):
         if test_mode:
@@ -229,13 +255,13 @@ def _evaluate_screening_candidate(
     breakout_signal = bool(company.get("valid_breakout", False))
 
     results = {
-        "eps": company.get("quarterly_eps_growth", 0) >= criteria.get("quarterly_eps_growth", 0),
-        "eps_cagr": company.get("annual_eps_cagr", 0) >= criteria.get("annual_eps_cagr", 0),
+        "eps": _passes_min_threshold(company.get("quarterly_eps_growth"), criteria.get("quarterly_eps_growth", 0)),
+        "eps_cagr": _passes_min_threshold(company.get("annual_eps_cagr"), criteria.get("annual_eps_cagr", 0)),
         "revenue": _passes_min_threshold(company.get("revenue_growth"), criteria.get("revenue_growth", 0)),
         "margin": _passes_min_threshold(company.get("profit_margin"), criteria.get("profit_margin", 0)),
         "roe": _passes_min_threshold(company.get("roe"), criteria.get("roe", 0)),
         "debt": debt_ok,
-        "mktcap": _passes_min_threshold(company.get("market_cap"), criteria.get("min_market_cap", 0)),
+        "mktcap": _check_market_cap_or_liquidity(company, criteria, leadership_criteria),
         "sp500": True,
         "rs": _passes_min_threshold(company.get("rs_rating"), leadership_criteria.get("rs_rating_min", 80)),
         "near_high": _passes_min_threshold(company.get("price_vs_52w_high"), leadership_criteria.get("price_vs_52w_high_min", 0.85)),

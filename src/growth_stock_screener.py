@@ -18,15 +18,20 @@ from src.utils.logger import setup_logger
 from src.utils.config_loader import load_config_file
 from src.utils.directory import ensure_directories
 from src.utils.pipeline_status import collect_pipeline_status, print_pipeline_status
+from src.utils.security_classifier import apply_security_classification
 from src.api.sec_client import SECClient
 from src.collectors.submissions_collector import SubmissionsCollector
 from src.collectors.facts_collector import CompanyFactsCollector
 from src.parsers.submissions_parser import SubmissionsParser
 from src.parsers.facts_parser import XBRLFactsParser
 from src.enrichers.market_data_enricher import enrich_market_data, enrich_leadership_data, MarketDataEnricher
+from src.enrichers.fundamental_fallback import enrich_missing_fundamentals
 from src.collectors.financial_data_collector import collect_financial_data
+from src.collectors.institutional_collector import enrich_companies_with_13f_data
+from src.collectors.insider_collector import enrich_companies_with_insider_data
 from src.formatters.results_formatter import ResultsFormatter
 from src.screeners.stock_screener import StockScreener
+from src.screeners.canslim_scoring import calculate_canslim_score
 from src.screeners.ticker_analysis import analyze_ticker, format_ticker_analysis
 from src.integrations.tradingview_export import export_tradingview_artifacts
 from src.screeners.candidate_filter import (
@@ -42,6 +47,7 @@ from src.ui.rich_printer import (
     print_metrics_stats,
     print_criteria_breakdown,
     print_results_table,
+    print_data_quality_warning,
     print_missing_enrich_warning,
     print_saved_result,
 )
@@ -179,6 +185,7 @@ def parse_data(config):
                         combined_df = combined_df.drop(columns=[metrics_field])
 
                 logger.info(f"Combined data for {len(combined_df)} companies, with {len(metrics_df)} providing metrics")
+                combined_df = enrich_missing_fundamentals(combined_df, config)
                 
                 # Check if financial metrics were successfully merged
                 for metric in metrics_found:
@@ -188,17 +195,27 @@ def parse_data(config):
                 companies_list = combined_df.to_dict(orient='records')
             else:
                 logger.warning("Column 'cik' not found in metrics dataframe, using company data only")
+                companies_df = enrich_missing_fundamentals(companies_df, config)
                 companies_list = companies_df.to_dict(orient='records')
         elif not companies_df.empty:
             logger.warning("No metrics data available, using company data only")
+            companies_df = enrich_missing_fundamentals(companies_df, config)
             companies_list = companies_df.to_dict(orient='records')
         elif not metrics_df.empty:
             logger.warning("No company index data available, using metrics data only")
+            metrics_df = enrich_missing_fundamentals(metrics_df, config)
             companies_list = metrics_df.to_dict(orient='records')
         else:
             logger.warning("No data available in either company index or metrics")
             companies_list = []
         
+        classification_settings = config.get("security_classification", {})
+        recent_listing_days = classification_settings.get("recent_listing_days", 730)
+        for company in companies_list:
+            apply_security_classification(company, recent_listing_days=recent_listing_days)
+        profile_counts = pd.Series([company.get("security_profile", "standard") for company in companies_list]).value_counts().to_dict()
+        logger.info(f"Security profile classification counts: {profile_counts}")
+
         # Save to JSON
         output_dir = os.path.dirname(config.get("data_paths", {}).get("output_file", "data/processed/results.csv"))
         os.makedirs(output_dir, exist_ok=True)
@@ -217,6 +234,177 @@ def parse_data(config):
         return False
 
 
+
+
+POSITIVE_VALUE_METRICS = {"market_cap", "avg_dollar_volume_50d"}
+BOOLEAN_SIGNAL_METRICS = {"new_52w_high", "near_pivot", "valid_breakout"}
+
+
+METRICS_FOR_COVERAGE = [
+    "quarterly_eps_growth",
+    "annual_eps_cagr",
+    "revenue_growth",
+    "profit_margin",
+    "roe",
+    "debt_to_equity",
+    "market_cap",
+    "rs_rating",
+    "price_vs_52w_high",
+    "avg_dollar_volume_50d",
+    "up_down_volume_ratio_50d",
+    "volume_trend_50_200",
+    "volume_dry_up_ratio_10_50",
+    "institutional_ownership",
+    "institutional_holders",
+    "institutional_holders_qoq_change",
+    "institutional_value_qoq_change",
+    "institutional_accumulation_score",
+    "new_holder_count",
+    "increased_holder_count",
+    "decreased_holder_count",
+    "exited_holder_count",
+    "insider_buy_count_90d",
+    "net_insider_buy_value_90d",
+    "canslim_score",
+    "breakout_volume_ratio",
+    "new_52w_high",
+    "near_pivot",
+    "valid_breakout",
+]
+
+
+def _has_metric_value(company: Dict[str, Any], metric: str) -> bool:
+    """Return True when *metric* contains a real data value.
+
+    Data coverage should measure availability, not whether a value is bullish.
+    Therefore numeric zero and boolean False count as available values.  The
+    only exception is fields where zero is a known placeholder for missing
+    market data, such as market cap and dollar volume.
+    """
+    if metric not in company:
+        return False
+    value = company.get(metric)
+    if value is None or not pd.notna(value):
+        return False
+    if metric in POSITIVE_VALUE_METRICS:
+        try:
+            return float(value) > 0
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def _calculate_metric_coverage(companies: list[Dict[str, Any]]) -> tuple[Dict[str, int], Dict[str, int]]:
+    """Return metric availability counts plus bullish signal true counts."""
+    coverage_counts = {metric: 0 for metric in METRICS_FOR_COVERAGE}
+    signal_counts = {metric: 0 for metric in BOOLEAN_SIGNAL_METRICS}
+    for company in companies:
+        for metric in METRICS_FOR_COVERAGE:
+            if _has_metric_value(company, metric):
+                coverage_counts[metric] += 1
+        for metric in BOOLEAN_SIGNAL_METRICS:
+            if bool(company.get(metric, False)):
+                signal_counts[metric] += 1
+    return coverage_counts, signal_counts
+
+
+def _collect_data_quality_warnings(
+    metrics_counts: Dict[str, int],
+    total: int,
+    config: Dict[str, Any],
+) -> list[str]:
+    """Return non-blocking data quality warnings for the screening report."""
+    warnings: list[str] = []
+    data_quality = config.get("data_quality", {}) if isinstance(config, dict) else {}
+    market_cap_min_coverage = float(data_quality.get("market_cap_min_coverage", 0) or 0)
+    if market_cap_min_coverage > 0 and total:
+        market_cap_count = metrics_counts.get("market_cap", 0)
+        market_cap_coverage = market_cap_count / total
+        if market_cap_coverage < market_cap_min_coverage:
+            warnings.append(
+                "시가총액 커버리지 낮음: "
+                f"{market_cap_count:,}/{total:,} ({market_cap_coverage * 100:.1f}%) < "
+                f"목표 {market_cap_min_coverage * 100:.1f}%. "
+                "`run_screener.py --mode enrich`로 yfinance market cap 보강을 다시 실행하세요."
+            )
+    insider_enabled = bool(config.get("insider_data", {}).get("enabled", False))
+    insider_count = max(
+        metrics_counts.get("insider_buy_count_90d", 0),
+        metrics_counts.get("net_insider_buy_value_90d", 0),
+    )
+    if insider_enabled and insider_count == 0:
+        warnings.append(
+            "내부자 Form 4 데이터 없음: insider_data가 켜져 있지만 로컬 Form 4 XML/집계 데이터가 없습니다. "
+            "필수 조건은 아니지만 내부자 신호는 비어 있습니다."
+        )
+    return warnings
+
+
+def _score_companies_for_diagnostics(
+    companies: list[Dict[str, Any]],
+    criteria: Dict[str, Any],
+    leadership_criteria: Dict[str, Any],
+    supply_demand_criteria: Dict[str, Any],
+    institutional_criteria: Dict[str, Any],
+    pattern_criteria: Dict[str, Any],
+    market_direction_ok: bool,
+) -> list[Dict[str, Any]]:
+    """Populate CAN SLIM scores for diagnostics before final pass/fail filtering."""
+    scored_companies: list[Dict[str, Any]] = []
+    for company in companies:
+        if company.get("ticker") and company.get("name"):
+            scored_companies.append(
+                calculate_canslim_score(
+                    company,
+                    criteria,
+                    leadership_criteria,
+                    supply_demand_criteria,
+                    institutional_criteria,
+                    pattern_criteria,
+                    market_direction_ok,
+                )
+            )
+        else:
+            scored_companies.append(dict(company))
+    return scored_companies
+
+
+def _hydrate_cached_enrichment(companies, config):
+    """Apply cached market/13F/insider enrichment before screening.
+
+    Screening should not report zero coverage just because the current companies
+    list is stale while local cache files already contain the enrichment data.
+    This function is cache/local only: it does not do broad live downloads.
+    """
+    hydrated = [dict(company) for company in companies]
+
+    try:
+        enricher_config = dict(config)
+        enricher_config["_quiet"] = True
+        enricher = MarketDataEnricher(enricher_config)
+        market_cache = enricher._load_market_data_files(enricher.market_data_dir)
+        for company in hydrated:
+            ticker = enricher._normalize_yahoo_ticker(company.get("ticker", ""))
+            cached = market_cache.get(ticker)
+            if cached:
+                company.update(cached)
+                company.setdefault("ticker", ticker)
+    except Exception as exc:
+        logger.warning(f"Could not apply cached market enrichment: {exc}")
+
+    if config.get("institutional_data", {}).get("enabled", False):
+        try:
+            hydrated = enrich_companies_with_13f_data(hydrated, config, sec_client=None)
+        except Exception as exc:
+            logger.warning(f"Could not apply cached/local 13F enrichment: {exc}")
+
+    if config.get("insider_data", {}).get("enabled", False):
+        try:
+            hydrated = enrich_companies_with_insider_data(hydrated, config, sec_client=None)
+        except Exception as exc:
+            logger.warning(f"Could not apply cached/local insider enrichment: {exc}")
+
+    return hydrated
 
 
 def screen_stocks(config):
@@ -239,6 +427,12 @@ def screen_stocks(config):
         
         with open(companies_list_file, 'r') as f:
             companies = json.load(f)
+        companies = _hydrate_cached_enrichment(companies, config)
+        try:
+            with open(companies_list_file, 'w') as f:
+                json.dump(companies, f, indent=2)
+        except Exception as exc:
+            logger.warning(f"Could not save hydrated company list to {companies_list_file}: {exc}")
         
         logger.info(f"Loaded data for {len(companies)} companies")
         print_screening_header(len(companies), config.get("profile_name"))
@@ -262,47 +456,29 @@ def screen_stocks(config):
             criteria, leadership_criteria, market_direction_criteria,
             market_direction, supply_demand_criteria, institutional_criteria,
         )
-        
-        # Financial metrics statistics
-        metrics_counts = {
-            "quarterly_eps_growth": 0,
-            "annual_eps_cagr": 0,
-            "revenue_growth": 0,
-            "profit_margin": 0,
-            "roe": 0,
-            "debt_to_equity": 0,
-            "market_cap": 0,
-            "rs_rating": 0,
-            "price_vs_52w_high": 0,
-            "avg_dollar_volume_50d": 0,
-            "up_down_volume_ratio_50d": 0,
-            "volume_trend_50_200": 0,
-            "volume_dry_up_ratio_10_50": 0,
-            "institutional_ownership": 0,
-            "institutional_holders": 0,
-            "institutional_holders_qoq_change": 0,
-            "institutional_value_qoq_change": 0,
-            "institutional_accumulation_score": 0,
-            "new_holder_count": 0,
-            "increased_holder_count": 0,
-            "decreased_holder_count": 0,
-            "exited_holder_count": 0,
-            "insider_buy_count_90d": 0,
-            "net_insider_buy_value_90d": 0,
-            "canslim_score": 0,
-            "breakout_volume_ratio": 0,
-            "new_52w_high": 0,
-            "near_pivot": 0,
-            "valid_breakout": 0
-        }
-        
-        # Count valid metrics
-        for company in companies:
-            for metric in metrics_counts.keys():
-                if metric in company and pd.notna(company[metric]) and company[metric] != 0:
-                    metrics_counts[metric] += 1
-        
-        print_metrics_stats(metrics_counts, len(companies))
+
+        market_direction_ok = True
+        if market_direction_criteria.get("required", False):
+            allowed_statuses = market_direction_criteria.get("allowed_statuses", ["confirmed_uptrend"])
+            market_direction_ok = market_direction.get("market_direction_status") in allowed_statuses
+
+        companies = _score_companies_for_diagnostics(
+            companies,
+            criteria,
+            leadership_criteria,
+            supply_demand_criteria,
+            institutional_criteria,
+            pattern_criteria,
+            market_direction_ok,
+        )
+
+        # Financial metrics statistics: availability, not bullish pass counts.
+        metrics_counts, signal_counts = _calculate_metric_coverage(companies)
+        print_metrics_stats(metrics_counts, len(companies), signal_counts=signal_counts)
+        data_quality_warnings = _collect_data_quality_warnings(metrics_counts, len(companies), config)
+        for warning in data_quality_warnings:
+            logger.warning(warning)
+        print_data_quality_warning(data_quality_warnings)
 
         missing_enrich_reasons = []
         if criteria.get("outperform_sp500", False) and metrics_counts.get("rs_rating", 0) == 0:
@@ -339,11 +515,6 @@ def screen_stocks(config):
             return
         
         # 기준에 맞는 회사 필터링
-        market_direction_ok = True
-        if market_direction_criteria.get("required", False):
-            allowed_statuses = market_direction_criteria.get("allowed_statuses", ["confirmed_uptrend"])
-            market_direction_ok = market_direction.get("market_direction_status") in allowed_statuses
-
         filtered_companies, criteria_counts = _filter_screening_candidates(
             companies,
             criteria,

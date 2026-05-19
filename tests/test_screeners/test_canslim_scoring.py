@@ -88,6 +88,21 @@ def test_calculate_canslim_score_adds_component_scores_band_and_reasons():
     assert scored["fail_reasons"] == []
 
 
+def test_institutional_score_respects_max_ownership_overowned_names():
+    scored = calculate_canslim_score(
+        dict(PASSING_COMPANY, institutional_ownership=0.97, institutional_holders=None, institutional_value_qoq_change=None, institutional_holders_qoq_change=None),
+        CRITERIA,
+        LEADERSHIP,
+        SUPPLY,
+        INSTITUTIONAL,
+        PATTERN,
+        market_direction_ok=True,
+    )
+
+    assert scored["component_scores"]["i"] == 0
+    assert "I: institutional ownership above maximum" in scored["fail_reasons"]
+
+
 def test_calculate_canslim_score_records_fail_reasons_for_weak_candidate():
     weak = dict(PASSING_COMPANY, quarterly_eps_growth=-0.10, rs_rating=55, new_52w_high=False, valid_breakout=False)
 

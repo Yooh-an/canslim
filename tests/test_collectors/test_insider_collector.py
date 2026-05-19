@@ -4,6 +4,7 @@ from src.collectors.insider_collector import (
     InsiderForm4Collector,
     aggregate_insider_activity,
     apply_insider_activity,
+    enrich_companies_with_insider_data,
     parse_form4_ownership_xml,
 )
 
@@ -87,6 +88,21 @@ def test_apply_insider_activity_maps_by_ticker():
     assert by_ticker["AAPL"]["insider_buy_count_90d"] == 1
     assert by_ticker["AAPL"]["insider_data_source"] == "sec_form4"
     assert "insider_buy_count_90d" not in by_ticker["MSFT"]
+
+
+def test_insider_enrichment_enabled_defaults_to_local_only_without_live_fetch(tmp_path):
+    (tmp_path / "local.xml").write_text(FORM4_XML)
+
+    class ExplodingSECClient:
+        def _make_request(self, url):
+            raise AssertionError("live SEC fetch should not run unless fetch_live=true")
+
+    companies = [{"ticker": "AAPL", "cik": "0000320193"}]
+    config = {"insider_data": {"enabled": True, "raw_form4_dir": str(tmp_path)}}
+
+    enriched = enrich_companies_with_insider_data(companies, config, sec_client=ExplodingSECClient())
+
+    assert enriched[0]["insider_signal"] == "net_buying"
 
 
 def test_collector_fetches_recent_form4_transactions(tmp_path):

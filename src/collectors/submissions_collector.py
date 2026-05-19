@@ -177,6 +177,22 @@ class SubmissionsCollector:
         logger.info(f"Created companies index with {len(companies_data)} companies")
         return companies_data
 
+    def _refresh_company_tickers(self, companies_data: Dict[str, Any], force: bool = False) -> Dict[str, Any]:
+        """Re-apply the latest available CIK/ticker mapping to company data."""
+        before = json.dumps(companies_data, sort_keys=True)
+        ticker_mapper = TickerMapper(self.config)
+        ticker_mapper.download_mapping(force=force)
+        companies_data = ticker_mapper.enrich_companies_with_tickers(companies_data)
+        after = json.dumps(companies_data, sort_keys=True)
+
+        if before != after:
+            companies_json_path = os.path.join(self.extracted_dir, "companies.json")
+            with open(companies_json_path, 'w') as f:
+                json.dump(companies_data, f, indent=2)
+            logger.info("Refreshed cached companies ticker mappings")
+
+        return companies_data
+
     def get_company_list(self, min_market_cap: Optional[float] = None) -> List[Dict[str, Any]]:
         """
         Get a list of companies from the submissions file.
@@ -195,6 +211,12 @@ class SubmissionsCollector:
             # Always process submissions file to ensure we have the latest data
             logger.info("Processing submissions file to generate company data...")
             companies_data = self.process_submissions_file()
+
+        force_ticker_refresh = self.config.get("ticker_mapping", {}).get(
+            "force_refresh_on_cached_companies",
+            False,
+        )
+        companies_data = self._refresh_company_tickers(companies_data, force=force_ticker_refresh)
 
         # Log the number of companies found for debugging
         logger.info(f"Processing found {len(companies_data)} companies")

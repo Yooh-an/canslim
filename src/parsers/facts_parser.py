@@ -102,13 +102,34 @@ class XBRLFactsParser:
     
     def get_company_facts_files(self) -> List[str]:
         """
-        Get a list of all company facts files in the facts directory.
+        Get a de-duplicated list of company facts files.
+
+        Prefer explicitly downloaded files in company_facts_dir, but also include
+        missing CIKs from the SEC bulk companyfacts extraction. This prevents newly
+        mapped tickers from appearing in the company universe with all metrics NaN
+        merely because their per-company file was not downloaded earlier.
         
         Returns:
             List of file paths
         """
-        files = glob.glob(os.path.join(self.company_facts_dir, "CIK*.json"))
-        logger.info(f"Found {len(files)} company facts files")
+        files_by_cik: Dict[str, str] = {}
+        for file_path in glob.glob(os.path.join(self.company_facts_dir, "CIK*.json")):
+            cik = os.path.basename(file_path).replace("CIK", "").replace(".json", "")
+            files_by_cik[cik] = file_path
+
+        extracted_dir = os.path.join(self.raw_data_dir, "submissions_extracted")
+        bulk_added = 0
+        for file_path in glob.glob(os.path.join(extracted_dir, "CIK*.json")):
+            cik = os.path.basename(file_path).replace("CIK", "").replace(".json", "")
+            if cik not in files_by_cik:
+                files_by_cik[cik] = file_path
+                bulk_added += 1
+
+        files = [files_by_cik[cik] for cik in sorted(files_by_cik)]
+        logger.info(
+            f"Found {len(files)} company facts files "
+            f"({len(files) - bulk_added} downloaded, {bulk_added} bulk fallback)"
+        )
         return files
     
     def load_company_facts(self, file_path: str) -> Dict[str, Any]:
@@ -187,8 +208,8 @@ class XBRLFactsParser:
 
             _, frame_quarter = frame_period(record.get('frame'))
             quarter = (
-                frame_quarter
-                or quarter_number(record.get('fp'))
+                quarter_number(record.get('fp'))
+                or frame_quarter
                 or quarter_from_end_date(record.get('end'))
             )
             frame = str(record.get('frame') or '').upper()

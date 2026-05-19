@@ -32,6 +32,18 @@ def _count_rows_with_any(rows: Iterable[Mapping[str, Any]], fields: Iterable[str
     return sum(1 for row in rows if any(row.get(field) is not None for field in field_list))
 
 
+def _count_rows_with_positive(rows: Iterable[Mapping[str, Any]], field: str) -> int:
+    count = 0
+    for row in rows:
+        value = row.get(field)
+        try:
+            if value is not None and float(value) > 0:
+                count += 1
+        except (TypeError, ValueError):
+            continue
+    return count
+
+
 def _command(mode: str, config: Mapping[str, Any]) -> str:
     config_path = config.get("config_path", "config/base.json")
     profile = config.get("profile_name")
@@ -67,6 +79,8 @@ def collect_pipeline_status(config: Mapping[str, Any]) -> Dict[str, Any]:
     rows = _json_rows(enriched_file if enriched_file.exists() else companies_file)
     company_count = len(rows)
     leadership_count = _count_rows_with_any(rows, ["rs_rating", "price_vs_52w_high", "avg_dollar_volume_50d"])
+    market_cap_count = _count_rows_with_positive(rows, "market_cap")
+    market_cap_coverage = (market_cap_count / company_count) if company_count else 0.0
     institutional_count = _count_rows_with_any(
         rows,
         [
@@ -81,13 +95,24 @@ def collect_pipeline_status(config: Mapping[str, Any]) -> Dict[str, Any]:
 
     download_ready = facts_count > 0 and companies_file.exists() and companies_file.stat().st_size > 0
     parse_ready = metrics_file.exists() and metrics_file.stat().st_size > 0 and companies_file.exists()
-    enrich_ready = enriched_file.exists() and market_file.exists() and leadership_count > 0
+    data_quality = config.get("data_quality", {}) if isinstance(config, Mapping) else {}
+    market_cap_min_coverage = float(data_quality.get("market_cap_min_coverage", 0) or 0)
+    market_cap_ready = market_cap_min_coverage <= 0 or market_cap_coverage >= market_cap_min_coverage
+    enrich_ready = enriched_file.exists() and market_file.exists() and leadership_count > 0 and market_cap_ready
     institutional_required = bool(config.get("institutional_criteria", {}).get("require_institutional_sponsorship", False))
     institutional_ready = (not institutional_required) or institutional_count > 0
     screen_ready = output_file.exists() and output_file.stat().st_size > 0
 
     warnings: List[str] = []
     recommended_commands: List[str] = []
+    if market_cap_min_coverage > 0 and not market_cap_ready:
+        warnings.append(
+            f"market_cap coverage low: {market_cap_count}/{company_count} "
+            f"({market_cap_coverage * 100:.1f}%) < required {market_cap_min_coverage * 100:.1f}%; run enrich"
+        )
+    if config.get("insider_data", {}).get("enabled", False) and insider_count == 0:
+        warnings.append("insider_data.enabled=true but no local/live SEC Form 4 insider data is available")
+
     if not download_ready:
         next_action = "download"
         recommended_commands.append(_command("download", config))
@@ -113,6 +138,10 @@ def collect_pipeline_status(config: Mapping[str, Any]) -> Dict[str, Any]:
         "facts_count": facts_count,
         "company_count": company_count,
         "leadership_count": leadership_count,
+        "market_cap_count": market_cap_count,
+        "market_cap_coverage": market_cap_coverage,
+        "market_cap_ready": market_cap_ready,
+        "market_cap_min_coverage": market_cap_min_coverage,
         "institutional_count": institutional_count,
         "insider_count": insider_count,
         "institutional_current_xml_count": institutional_current_count,
@@ -148,7 +177,10 @@ def print_pipeline_status(status: Mapping[str, Any]) -> None:
     print(f"Pipeline status for profile: {status.get('profile_name')}")
     print(f"- Download data: {'✅' if status.get('download_ready') else '❌'} ({status.get('facts_count')} company facts)")
     print(f"- Parsed data: {'✅' if status.get('parse_ready') else '❌'} ({status.get('company_count')} companies)")
-    print(f"- Market/leadership enrichment: {'✅' if status.get('enrich_ready') else '❌'} ({status.get('leadership_count')} companies)")
+    print(
+        f"- Market/leadership enrichment: {'✅' if status.get('enrich_ready') else '❌'} "
+        f"({status.get('leadership_count')} leadership, {status.get('market_cap_count')} market cap)"
+    )
     print(f"- Institutional data: {'✅' if status.get('institutional_ready') else '❌'} ({status.get('institutional_count')} companies)")
     print(f"- Insider Form 4 data: {'✅' if status.get('insider_count') else '⚪'} ({status.get('insider_count')} companies)")
     print(f"- Screen results: {'✅' if status.get('screen_ready') else '❌'}")
@@ -176,7 +208,10 @@ def format_pipeline_status(status: Mapping[str, Any], *, rich_mode: bool = False
         parts.append(f"Pipeline status for profile: {status.get('profile_name')}")
         parts.append(f"- Download data: {'✅' if status.get('download_ready') else '❌'} ({status.get('facts_count')} company facts)")
         parts.append(f"- Parsed data: {'✅' if status.get('parse_ready') else '❌'} ({status.get('company_count')} companies)")
-        parts.append(f"- Market/leadership enrichment: {'✅' if status.get('enrich_ready') else '❌'} ({status.get('leadership_count')} companies)")
+        parts.append(
+            f"- Market/leadership enrichment: {'✅' if status.get('enrich_ready') else '❌'} "
+            f"({status.get('leadership_count')} leadership, {status.get('market_cap_count')} market cap)"
+        )
         parts.append(f"- Institutional data: {'✅' if status.get('institutional_ready') else '❌'} ({status.get('institutional_count')} companies)")
         parts.append(f"- Insider Form 4 data: {'✅' if status.get('insider_count') else '⚪'} ({status.get('insider_count')} companies)")
         parts.append(f"- Screen results: {'✅' if status.get('screen_ready') else '❌'}")
@@ -201,7 +236,12 @@ def format_pipeline_status(status: Mapping[str, Any], *, rich_mode: bool = False
     steps = [
         ("download_ready", "데이터 다운로드", f"{status.get('facts_count', 0)} company facts", "📥"),
         ("parse_ready", "데이터 파싱", f"{status.get('company_count', 0)} companies", "⚙️"),
-        ("enrich_ready", "시장/리더십 보강", f"{status.get('leadership_count', 0)} companies", "📈"),
+        (
+            "enrich_ready",
+            "시장/리더십 보강",
+            f"{status.get('leadership_count', 0)} leadership / {status.get('market_cap_count', 0)} market cap",
+            "📈",
+        ),
         ("institutional_ready", "기관 데이터", f"{status.get('institutional_count', 0)} companies", "🏦"),
     ]
 

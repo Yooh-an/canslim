@@ -123,8 +123,14 @@ def print_screening_criteria(
 def print_metrics_stats(
     metrics_counts: Dict[str, int],
     total: int,
+    *,
+    signal_counts: Dict[str, int] | None = None,
 ) -> None:
-    """Print financial metrics coverage as a compact bar chart table."""
+    """Print data availability as a compact bar chart table.
+
+    For boolean setup/signal metrics, coverage means the field was computed;
+    ``signal_counts`` optionally shows how many rows have the bullish signal.
+    """
     console = _get_console()
 
     # Group metrics into categories for readability
@@ -185,9 +191,12 @@ def print_metrics_stats(
             else:
                 bar_color = "bright_red"
             bar = f"[{bar_color}]{'█' * filled}[/{bar_color}][dim]{'░' * (bar_len - filled)}[/dim]"
+            extra = ""
+            if signal_counts and key in signal_counts:
+                extra = f" [dim](True {signal_counts.get(key, 0):,})[/dim]"
             table.add_row(
                 f"  {key}",
-                f"[dim]{count:,}[/dim] / [dim]{total:,}[/dim]",
+                f"[dim]{count:,}[/dim] / [dim]{total:,}[/dim]{extra}",
                 bar,
                 f"[{bar_color}]{pct:.1f}%[/{bar_color}]",
             )
@@ -397,6 +406,23 @@ def print_results_table(
         console.print(
             f"  [dim]… 외 {total_passed - max_display}개 종목은 결과 파일을 참조하세요.[/dim]"
         )
+
+
+def print_data_quality_warning(warnings: Sequence[str]) -> None:
+    """Print non-blocking warnings for partial enrichment/data coverage."""
+    if not warnings:
+        return
+    console = _get_console()
+    lines = [f"  [yellow]•[/yellow] {warning}" for warning in warnings]
+    panel = Panel(
+        "\n".join(lines),
+        title="[bold bright_yellow]  ⚠️  데이터 품질 경고  [/bold bright_yellow]",
+        title_align="left",
+        border_style="yellow",
+        box=box.ROUNDED,
+        padding=(1, 2),
+    )
+    console.print(panel)
 
 
 def print_missing_enrich_warning(

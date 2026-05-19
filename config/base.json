@@ -11,7 +11,14 @@
     "company_facts_dir": "data/raw/company_facts",
     "output_file": "data/processed/results.csv",
     "cik_ticker_mapping": "data/processed/cik_ticker_mapping.csv",
+    "ticker_overrides_file": "data/processed/ticker_overrides.csv",
     "cusip_ticker_mapping": "data/processed/cusip_ticker_mapping.csv"
+  },
+  "ticker_mapping": {
+    "force_refresh_on_cached_companies": true
+  },
+  "security_classification": {
+    "recent_listing_days": 730
   },
   "download_settings": {
     "max_workers": 4,
@@ -36,22 +43,37 @@
     "rally_lookback_days": 30,
     "enrich_only_screenable_candidates": false,
     "yfinance_max_workers": 6,
-    "use_yfinance_info_fallback": false
+    "use_yfinance_info_fallback": true
   },
   "institutional_data": {
-    "enabled": false,
+    "enabled": true,
     "raw_13f_dir": "data/raw/institutional_13f",
     "cusip_ticker_mapping": "data/processed/cusip_ticker_mapping.csv",
     "manager_ciks": []
   },
   "insider_data": {
-    "enabled": false,
+    "enabled": true,
+    "fetch_live": false,
     "raw_form4_dir": "data/raw/insider_form4",
     "company_ciks": [],
     "limit_per_company": 20
   },
+  "data_quality": {
+    "market_cap_min_coverage": 0.5
+  },
   "optional_api_keys": {
-    "fmp_api_key": null
+    "fmp_api_key": null,
+    "simfin_api_key": null
+  },
+  "fundamental_data": {
+    "enabled": true,
+    "provider": "simfin",
+    "only_missing_sec_metrics": true,
+    "max_companies": 250,
+    "cache_max_age_days": 30,
+    "rate_limit_delay": 0.25,
+    "simfin_statements": "pl,bs,derived",
+    "simfin_periods": "q1,q2,q3,q4,fy"
   },
   "logging": {
     "level": "DEBUG",

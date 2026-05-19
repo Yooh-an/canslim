@@ -190,6 +190,43 @@ class TestSubmissionsCollector(unittest.TestCase):
         companies = self.collector.get_company_list(min_market_cap=6000000000)
         self.assertEqual(len(companies), 1)  # Only the first company should remain
 
+    @patch('src.collectors.submissions_collector.TickerMapper')
+    def test_get_company_list_remaps_cached_companies_before_filtering(self, mock_mapper_cls):
+        """Cached companies.json should receive fresh ticker mappings before ticker filtering."""
+        companies_data = {
+            "0002023554": {
+                "name": "Sandisk Corporation",
+                "tickers": [],
+                "exchanges": [],
+                "marketCap": 0,
+            }
+        }
+
+        companies_file = os.path.join(self.collector.extracted_dir, "companies.json")
+        with open(companies_file, 'w') as f:
+            json.dump(companies_data, f)
+
+        mock_mapper = mock_mapper_cls.return_value
+        mock_mapper.download_mapping.return_value = True
+
+        def add_sndk(companies):
+            companies["0002023554"]["tickers"] = ["SNDK"]
+            companies["0002023554"]["exchanges"] = ["Nasdaq"]
+            return companies
+
+        mock_mapper.enrich_companies_with_tickers.side_effect = add_sndk
+
+        companies = self.collector.get_company_list()
+
+        self.assertEqual(len(companies), 1)
+        self.assertEqual(companies[0]["ticker"], "SNDK")
+        self.assertEqual(companies[0]["exchange"], "Nasdaq")
+        mock_mapper.download_mapping.assert_called_once()
+        mock_mapper.enrich_companies_with_tickers.assert_called_once()
+        with open(companies_file, 'r') as f:
+            saved = json.load(f)
+        self.assertEqual(saved["0002023554"]["tickers"], ["SNDK"])
+
     def test_get_company_list_keeps_unknown_market_cap_for_later_enrichment(self):
         """Unknown market caps should not be filtered before market-data enrichment."""
         companies_data = {

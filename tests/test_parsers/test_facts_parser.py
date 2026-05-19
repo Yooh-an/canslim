@@ -54,6 +54,33 @@ class TestXBRLFactsParser(unittest.TestCase):
         self.assertEqual(self.parser.processed_data_dir, os.path.join(self.temp_dir, "processed"))
         self.assertTrue(os.path.isdir(self.parser.processed_data_dir), "Processed directory should be created")
 
+    def test_get_company_facts_files_includes_bulk_extracted_fallback(self):
+        """Parser should use bulk companyfacts extracted files missing from company_facts_dir."""
+        extracted_dir = os.path.join(self.config["data_paths"]["raw_data_dir"], "submissions_extracted")
+        os.makedirs(extracted_dir, exist_ok=True)
+        extracted_file = os.path.join(extracted_dir, "CIK0002023554.json")
+        with open(extracted_file, "w") as f:
+            json.dump({"cik": "0002023554", "entityName": "Sandisk Corporation", "facts": {}}, f)
+
+        files = self.parser.get_company_facts_files()
+
+        self.assertEqual(files, [extracted_file])
+
+    def test_get_company_facts_files_prefers_company_facts_over_bulk_duplicate(self):
+        """When both sources contain the same CIK, prefer the explicit company_facts_dir file."""
+        extracted_dir = os.path.join(self.config["data_paths"]["raw_data_dir"], "submissions_extracted")
+        os.makedirs(extracted_dir, exist_ok=True)
+        extracted_file = os.path.join(extracted_dir, "CIK0002023554.json")
+        company_file = os.path.join(self.config["data_paths"]["company_facts_dir"], "CIK0002023554.json")
+        with open(extracted_file, "w") as f:
+            json.dump({"source": "bulk"}, f)
+        with open(company_file, "w") as f:
+            json.dump({"source": "company_facts"}, f)
+
+        files = self.parser.get_company_facts_files()
+
+        self.assertEqual(files, [company_file])
+
     def test_empty_result_when_no_files(self):
         """Test that an empty DataFrame is returned when no files exist."""
         print("Running facts parser test_empty_result_when_no_files")
@@ -101,6 +128,28 @@ class TestXBRLFactsParser(unittest.TestCase):
 
         self.assertEqual(values["2023Q4"], 40)
         self.assertNotIn("2025Q4", values)
+
+    def test_quarterly_flow_prefers_fiscal_period_over_calendar_frame(self):
+        """Calendar frame labels must not turn fiscal Q1/Q2 facts into calendar Q4/Q1."""
+        concept_data = {
+            "units": {
+                "USD": [
+                    {"form": "10-Q", "fy": 2025, "fp": "Q1", "start": "2024-11-04", "end": "2025-02-02", "filed": "2025-03-12", "val": 1.14},
+                    {"form": "10-Q", "fy": 2025, "fp": "Q2", "frame": "CY2025Q1", "start": "2025-02-03", "end": "2025-05-04", "filed": "2025-06-11", "val": 1.03},
+                    {"form": "10-Q", "fy": 2026, "fp": "Q1", "frame": "CY2025Q4", "start": "2025-11-03", "end": "2026-02-01", "filed": "2026-03-11", "val": 1.50},
+                ]
+            }
+        }
+
+        series = self.parser._quarterly_flow_series(concept_data, ["USD"])
+        values = {item["period_key"]: item["val"] for item in series}
+        yoy = self.parser._latest_same_quarter_yoy(series)
+
+        self.assertEqual(values["2026Q1"], 1.50)
+        self.assertEqual(values["2025Q1"], 1.14)
+        self.assertEqual(values["2025Q2"], 1.03)
+        self.assertNotIn("2026Q4", values)
+        self.assertAlmostEqual(yoy[0], 1.50 / 1.14 - 1)
 
     def test_quarterly_flow_uses_fiscal_year_for_non_calendar_year_companies(self):
         """Fiscal years ending in January should group Q1-Q4 under SEC fy, not calendar year."""

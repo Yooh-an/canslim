@@ -1,34 +1,27 @@
 {
   "extends": "../base.json",
-  "profile_name": "canslim_watchlist",
+  "profile_name": "financials_leaders",
   "data_paths": {
-    "output_file": "data/processed/results_canslim_watchlist.csv"
+    "output_file": "data/processed/results_financials_leaders.csv"
   },
   "screening_criteria": {
-    "_comment": "Broader CAN SLIM watchlist: preserve growth/leadership intent while not requiring complete institutional sponsorship coverage.",
-    "quarterly_eps_growth": 0.20,
-    "annual_eps_cagr": 0.20,
-    "revenue_growth": 0.15,
-    "profit_margin": 0.03,
-    "roe": 0.15,
-    "debt_to_equity": 2.5,
+    "_comment": "Financials profile: debt-to-equity and profit margin are not comparable to industrial companies; emphasize EPS, ROE, market cap, and leadership.",
+    "include_security_profiles": ["financials"],
+    "quarterly_eps_growth": 0.15,
+    "annual_eps_cagr": 0.10,
+    "revenue_growth": null,
+    "profit_margin": null,
+    "roe": 0.10,
+    "debt_to_equity": null,
     "outperform_sp500": true,
-    "min_market_cap": 300000000
+    "min_market_cap": 1000000000
   },
   "leadership_criteria": {
     "rs_rating_min": 75,
     "price_vs_52w_high_min": 0.80,
-    "avg_dollar_volume_min": 10000000,
+    "avg_dollar_volume_min": 15000000,
     "rs_line_near_high": false,
-    "rs_line_high_threshold": 0.95,
     "require_industry_leadership": false
-  },
-  "market_direction": {
-    "required": true,
-    "allowed_statuses": [
-      "confirmed_uptrend",
-      "uptrend_under_pressure"
-    ]
   },
   "supply_demand_criteria": {
     "require_supply_demand": true,
@@ -37,11 +30,8 @@
     "require_breakout_volume_confirmation": false
   },
   "institutional_criteria": {
-    "_comment": "Watchlist mode does not fail missing institutional data; I is still reflected in canslim_score when present.",
     "require_institutional_sponsorship": false,
     "sponsorship_mode": "ownership_or_holders_or_trend",
-    "institutional_ownership_min": 0.05,
-    "institutional_ownership_max": 0.95,
     "institutional_holders_min": 3,
     "institutional_holders_qoq_min": 0,
     "institutional_value_qoq_min": 0,
@@ -52,14 +42,11 @@
     "allow_near_pivot_setup": true,
     "price_vs_52w_high_hard_min": 0.85,
     "breakout_pct_min": -0.05,
-    "require_new_52w_high": false,
-    "require_near_pivot": false,
-    "require_valid_breakout": false,
     "require_base_depth": false,
     "base_depth_max": 0.40,
     "breakout_volume_ratio_min": 1.20
   },
   "market_data": {
-    "use_yfinance_info_fallback": true
+    "enrich_only_screenable_candidates": false
   }
 }

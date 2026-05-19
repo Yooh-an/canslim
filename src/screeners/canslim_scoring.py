@@ -125,13 +125,21 @@ def _score_institutional(company: Mapping[str, Any], criteria: Mapping[str, Any]
     pass_reasons: list[str] = []
     fail_reasons: list[str] = []
     ownership = _num(company.get("institutional_ownership"))
+    ownership_min = criteria.get("institutional_ownership_min", 0.05)
+    ownership_max = criteria.get("institutional_ownership_max")
     holders = _num(company.get("institutional_holders"))
     holders_min = _num(criteria.get("institutional_holders_min", 3), 3)
     holder_change = _num(company.get("institutional_holders_qoq_change"))
     value_change = _num(company.get("institutional_value_qoq_change"))
     accumulation = _num(company.get("institutional_accumulation_score"))
+
+    ownership_within_bounds = True
+    if ownership_max is not None and ownership > _num(ownership_max, default=float("inf")):
+        ownership_within_bounds = False
+        fail_reasons.append("I: institutional ownership above maximum")
+    ownership_score = _ratio_score(ownership, ownership_min, cap=4.0) if ownership_within_bounds else 0.0
     score = max(
-        _ratio_score(ownership, criteria.get("institutional_ownership_min", 0.05), cap=4.0),
+        ownership_score,
         _ratio_score(holders, holders_min, cap=4.0),
         65.0 if holder_change >= 0 and value_change >= 0 and (holder_change != 0 or value_change != 0) else 0.0,
         accumulation,
@@ -139,7 +147,8 @@ def _score_institutional(company: Mapping[str, Any], criteria: Mapping[str, Any]
     if score >= 50:
         pass_reasons.append("I: institutional sponsorship")
     else:
-        fail_reasons.append("I: insufficient institutional sponsorship")
+        if not fail_reasons:
+            fail_reasons.append("I: insufficient institutional sponsorship")
     return min(100.0, score), pass_reasons, fail_reasons
 
 

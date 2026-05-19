@@ -237,6 +237,89 @@ class TestPureProfileLogic(unittest.TestCase):
             )
         )
 
+    def test_unknown_market_cap_can_pass_when_liquidity_is_strong(self):
+        company = {
+            "ticker": "LIQ",
+            "name": "Liquid Corp",
+            "quarterly_eps_growth": 0.30,
+            "annual_eps_cagr": 0.30,
+            "revenue_growth": 0.25,
+            "profit_margin": 0.10,
+            "roe": 0.20,
+            "debt_to_equity": 1.0,
+            "market_cap": 0,
+            "rs_rating": 90,
+            "price_vs_52w_high": 0.93,
+            "avg_dollar_volume_50d": 50_000_000,
+            "market_outperformance_12m": 0.05,
+            "up_down_volume_ratio_50d": 1.2,
+            "volume_trend_50_200": 1.0,
+            "new_52w_high": True,
+        }
+
+        filtered, counts = _filter_screening_candidates(
+            [company],
+            {
+                "quarterly_eps_growth": 0.25,
+                "annual_eps_cagr": 0.25,
+                "revenue_growth": 0.20,
+                "profit_margin": 0.05,
+                "roe": 0.17,
+                "debt_to_equity": 2.0,
+                "outperform_sp500": True,
+                "min_market_cap": 300_000_000,
+            },
+            {"rs_rating_min": 80, "price_vs_52w_high_min": 0.85, "avg_dollar_volume_min": 15_000_000},
+            {"require_supply_demand": True, "up_down_volume_ratio_min": 1.0, "volume_trend_50_200_min": 0.9},
+            {"require_institutional_sponsorship": False},
+            {"require_new_high_or_breakout": True},
+            market_direction_ok=True,
+            test_mode=False,
+        )
+
+        self.assertEqual([row["ticker"] for row in filtered], ["LIQ"])
+        self.assertEqual(counts["mktcap"], 1)
+
+    def test_profile_filter_and_optional_fundamentals_support_special_universes(self):
+        ipo_company = {
+            "ticker": "IPO",
+            "name": "IPO Corp",
+            "security_profile": "ipo_spinoff",
+            "revenue_growth": 0.30,
+            "market_cap": 1_000_000_000,
+            "rs_rating": 90,
+            "price_vs_52w_high": 0.95,
+            "avg_dollar_volume_50d": 40_000_000,
+            "market_outperformance_12m": 0.10,
+            "up_down_volume_ratio_50d": 1.4,
+            "volume_trend_50_200": 1.1,
+            "new_52w_high": True,
+        }
+        standard_company = {**ipo_company, "ticker": "STD", "security_profile": "standard"}
+
+        filtered, _ = _filter_screening_candidates(
+            [ipo_company, standard_company],
+            {
+                "include_security_profiles": ["ipo_spinoff"],
+                "quarterly_eps_growth": None,
+                "annual_eps_cagr": None,
+                "revenue_growth": 0.15,
+                "profit_margin": None,
+                "roe": None,
+                "debt_to_equity": None,
+                "outperform_sp500": True,
+                "min_market_cap": 300_000_000,
+            },
+            {"rs_rating_min": 80, "price_vs_52w_high_min": 0.85, "avg_dollar_volume_min": 10_000_000},
+            {"require_supply_demand": True, "up_down_volume_ratio_min": 1.0, "volume_trend_50_200_min": 0.8},
+            {"require_institutional_sponsorship": False},
+            {"require_new_high_or_breakout": True},
+            market_direction_ok=True,
+            test_mode=False,
+        )
+
+        self.assertEqual([stock["ticker"] for stock in filtered], ["IPO"])
+
     def test_summary_counts_base_and_breakout_as_distinct_signals(self):
         company = {
             "ticker": "SETUP",

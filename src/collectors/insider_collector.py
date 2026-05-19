@@ -274,7 +274,8 @@ def enrich_companies_with_insider_data(companies: Sequence[Mapping[str, Any]], c
     raw_dir = insider_config.get("raw_form4_dir", os.path.join(data_paths.get("raw_data_dir", "data/raw"), "insider_form4"))
     collector = InsiderForm4Collector(sec_client, raw_dir=raw_dir) if sec_client is not None else None
     ciks = insider_config.get("company_ciks") or [company.get("cik") for company in companies if company.get("cik")]
-    if collector is not None and ciks:
+    fetch_live = bool(insider_config.get("fetch_live", False))
+    if fetch_live and collector is not None and ciks:
         transactions = collector.fetch_recent_transactions(ciks, limit_per_company=insider_config.get("limit_per_company", 20))
     else:
         from types import SimpleNamespace

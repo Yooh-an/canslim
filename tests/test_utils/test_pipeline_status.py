@@ -72,3 +72,31 @@ def test_collect_pipeline_status_reports_ready_when_outputs_exist(tmp_path):
     assert status["screen_ready"] is True
     assert status["institutional_ready"] is True
     assert status["next_action"] == "none"
+
+
+def test_collect_pipeline_status_recommends_enrich_when_market_cap_coverage_is_too_low(tmp_path):
+    cfg = _config(tmp_path, require_institutional=False)
+    cfg["data_quality"] = {"market_cap_min_coverage": 0.5}
+    facts_dir = Path(cfg["data_paths"]["company_facts_dir"])
+    processed = Path(cfg["data_paths"]["processed_data_dir"])
+    facts_dir.mkdir(parents=True)
+    processed.mkdir(parents=True)
+    (facts_dir / "CIK0000000001.json").write_text("{}")
+    (processed / "companies_list.json").write_text(json.dumps([{"ticker": "AAA"}, {"ticker": "BBB"}]))
+    (processed / "financial_metrics.parquet").write_bytes(b"not-empty")
+    (processed / "companies_list_enriched.json").write_text(
+        json.dumps([
+            {"ticker": "AAA", "rs_rating": 90, "price_vs_52w_high": 0.9, "market_cap": 0},
+            {"ticker": "BBB", "rs_rating": 85, "price_vs_52w_high": 0.8},
+        ])
+    )
+    (processed / "market_direction.json").write_text(json.dumps({"market_direction_status": "confirmed_uptrend"}))
+
+    status = collect_pipeline_status(cfg)
+
+    assert status["leadership_count"] == 2
+    assert status["market_cap_count"] == 0
+    assert status["market_cap_ready"] is False
+    assert status["enrich_ready"] is False
+    assert status["next_action"] == "enrich"
+    assert "market_cap coverage low" in "\n".join(status["warnings"])

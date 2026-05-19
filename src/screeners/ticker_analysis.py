@@ -7,21 +7,104 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
+import pandas as pd
+
+from src.collectors.institutional_collector import enrich_companies_with_13f_data
+from src.enrichers.fundamental_fallback import enrich_company_fundamentals
+from src.enrichers.market_data_enricher import MarketDataEnricher
 from src.screeners.candidate_filter import _evaluate_screening_candidate
 from src.screeners.canslim_scoring import calculate_canslim_score
 from src.screeners.trade_rules import add_trade_rules
 
 
 def _load_companies(config: Mapping[str, Any]) -> list[Dict[str, Any]]:
-    processed_dir = Path(config.get("data_paths", {}).get("processed_data_dir", "data/processed"))
+    data_paths = config.get("data_paths", {})
+    processed_dir = Path(data_paths.get("processed_data_dir", "data/processed"))
     enriched_file = processed_dir / "companies_list_enriched.json"
     companies_file = processed_dir / "companies_list.json"
-    source = enriched_file if enriched_file.exists() else companies_file
-    if not source.exists():
-        return []
-    with source.open("r") as f:
-        payload = json.load(f)
-    return payload if isinstance(payload, list) else []
+    raw_companies_file = Path(data_paths.get("raw_data_dir", "data/raw")) / "submissions_extracted" / "companies.json"
+
+    companies_by_ticker: dict[str, Dict[str, Any]] = {}
+    for source in (enriched_file, companies_file):
+        if not source.exists():
+            continue
+        with source.open("r") as f:
+            payload = json.load(f)
+        if not isinstance(payload, list):
+            continue
+        for row in payload:
+            ticker = str(row.get("ticker") or "").upper().replace(".", "-")
+            if ticker:
+                companies_by_ticker.setdefault(ticker, row)
+
+    if raw_companies_file.exists():
+        with raw_companies_file.open("r") as f:
+            payload = json.load(f)
+        if isinstance(payload, dict):
+            for cik, row in payload.items():
+                tickers = row.get("tickers") or []
+                if not tickers:
+                    continue
+                exchanges = row.get("exchanges") or []
+                company = {
+                    "cik": str(cik).lstrip("0") or "0",
+                    "cik_padded": str(cik).zfill(10),
+                    "ticker": tickers[0],
+                    "exchange": exchanges[0] if exchanges else "",
+                    "name": row.get("name", ""),
+                    "market_cap": row.get("marketCap", 0) or 0,
+                    "sic": row.get("sic", ""),
+                    "category": row.get("category", ""),
+                }
+                ticker = str(company["ticker"]).upper().replace(".", "-")
+                companies_by_ticker.setdefault(ticker, company)
+
+    return list(companies_by_ticker.values())
+
+
+def _needs_market_enrichment(company: Mapping[str, Any], config: Mapping[str, Any] | None = None) -> bool:
+    fields = [
+        "current_price",
+        "rs_rating",
+        "price_vs_52w_high",
+        "avg_dollar_volume_50d",
+        "up_down_volume_ratio_50d",
+        "volume_trend_50_200",
+    ]
+    if not company.get("market_cap"):
+        return True
+    if any(field not in company or not pd.notna(company.get(field)) for field in fields):
+        return True
+
+    institutional_criteria = (config or {}).get("institutional_criteria", {})
+    market_data = (config or {}).get("market_data", {})
+    wants_institutional = institutional_criteria.get("require_institutional_sponsorship", False) or market_data.get("use_yfinance_info_fallback", False)
+    if wants_institutional and not company.get("institutional_data_source"):
+        ownership_missing = "institutional_ownership" not in company or not pd.notna(company.get("institutional_ownership"))
+        holders_missing = "institutional_holders" not in company or not pd.notna(company.get("institutional_holders"))
+        if ownership_missing and holders_missing:
+            return True
+
+    return False
+
+
+def _needs_13f_enrichment(company: Mapping[str, Any], config: Mapping[str, Any]) -> bool:
+    if not config.get("institutional_data", {}).get("enabled", False):
+        return False
+    fields = ["institutional_holders", "institutional_accumulation_score"]
+    return any(field not in company or not pd.notna(company.get(field)) for field in fields)
+
+
+def _enrich_single_ticker_institutional(company: Dict[str, Any], config: Mapping[str, Any]) -> Dict[str, Any]:
+    if not _needs_13f_enrichment(company, config):
+        return company
+    try:
+        enriched = enrich_companies_with_13f_data([company], config, sec_client=None)
+    except Exception:
+        return company
+    if enriched:
+        return dict(enriched[0])
+    return company
 
 
 def _market_direction_ok(config: Mapping[str, Any]) -> tuple[bool, Dict[str, Any]]:
@@ -51,6 +134,12 @@ def analyze_ticker(ticker: str, config: Mapping[str, Any]) -> Dict[str, Any]:
     )
     if company is None:
         return {"found": False, "ticker": normalized}
+    company = enrich_company_fundamentals(dict(company), dict(config))
+    if _needs_market_enrichment(company, config) and config.get("market_data", {}).get("on_demand_ticker_enrichment", True):
+        market_config = dict(config)
+        market_config["_quiet"] = True
+        company = MarketDataEnricher(market_config).enrich_single_ticker_market_data(company)
+    company = _enrich_single_ticker_institutional(company, config)
 
     criteria = config.get("screening_criteria", {})
     leadership_criteria = config.get("leadership_criteria", {})
@@ -94,7 +183,10 @@ def analyze_ticker(ticker: str, config: Mapping[str, Any]) -> Dict[str, Any]:
 
 def _pct(value: Any) -> str:
     try:
-        return f"{float(value) * 100:.1f}%"
+        value = float(value)
+        if not pd.notna(value):
+            return "N/A"
+        return f"{value * 100:.1f}%"
     except Exception:
         return "N/A"
 
@@ -102,6 +194,8 @@ def _pct(value: Any) -> str:
 def _money(value: Any) -> str:
     try:
         value = float(value)
+        if not pd.notna(value):
+            return "N/A"
     except Exception:
         return "N/A"
     if abs(value) >= 1_000_000_000:
@@ -109,6 +203,30 @@ def _money(value: Any) -> str:
     if abs(value) >= 1_000_000:
         return f"${value / 1_000_000:.2f}M"
     return f"${value:,.0f}"
+
+
+def _fmt_num(value: Any, digits: int = 2) -> str:
+    try:
+        value = float(value)
+        if not pd.notna(value):
+            return "N/A"
+    except Exception:
+        return "N/A"
+    text = f"{value:.{digits}f}"
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _fmt_price(value: Any) -> str:
+    return _fmt_num(value, 2)
+
+
+def _fmt_rating(value: Any) -> str:
+    return _fmt_num(value, 1)
+
+
+def _fmt_ratio(value: Any) -> str:
+    formatted = _fmt_num(value, 2)
+    return "N/A" if formatted == "N/A" else f"{formatted}x"
 
 
 def _score_color(score: Any, max_val: int = 20) -> str:
@@ -174,9 +292,17 @@ def _format_plain(result: Mapping[str, Any]) -> str:
         f"- Annual EPS CAGR: {_pct(result.get('annual_eps_cagr'))}",
         f"- Revenue growth: {_pct(result.get('revenue_growth'))}",
         f"- ROE: {_pct(result.get('roe'))}",
-        f"- RS rating: {result.get('rs_rating', 'N/A')}",
+        f"- RS rating: {_fmt_rating(result.get('rs_rating'))}",
         f"- Price vs 52w high: {_pct(result.get('price_vs_52w_high'))}",
         f"- Market cap: {_money(result.get('market_cap'))}",
+        "",
+        "Setup:",
+        f"- Status: {result.get('setup_status', 'N/A')}",
+        f"- Type: {result.get('setup_type', 'N/A')}",
+        f"- Pivot: {_fmt_price(result.get('pivot_price'))}",
+        f"- Current price: {_fmt_price(result.get('current_price'))}",
+        f"- Pivot distance: {_fmt_num(result.get('pivot_distance_pct'), 2)}%",
+        f"- Breakout volume: {_fmt_ratio(result.get('breakout_volume_ratio'))}",
         "",
         "Trade plan:",
         f"- Buy zone: {result.get('buy_zone_low', 'N/A')} ~ {result.get('buy_zone_high', 'N/A')}",
@@ -184,10 +310,14 @@ def _format_plain(result: Mapping[str, Any]) -> str:
         f"- Profit target: {result.get('profit_target_low', 'N/A')} ~ {result.get('profit_target_high', 'N/A')}",
         "",
         "Institutional / insider:",
-        f"- Institutional holders: {result.get('institutional_holders', 'N/A')}",
-        f"- 13F accumulation score: {result.get('institutional_accumulation_score', 'N/A')}",
+        f"- Institutional ownership: {_pct(result.get('institutional_ownership'))}",
+        f"- Institutional holders: {_fmt_num(result.get('institutional_holders'), 0)}",
+        f"- Institutional data source: {result.get('institutional_data_source', 'N/A')}",
+        f"- 13F accumulation score: {_fmt_num(result.get('institutional_accumulation_score'), 1)}",
         f"- Insider signal: {result.get('insider_signal', 'N/A')}",
     ]
+    if result.get("setup_reasons"):
+        lines.extend(["", "Setup reasons:", *[f"- {reason}" for reason in result["setup_reasons"]]])
     if result.get("pass_reasons"):
         lines.extend(["", "Pass reasons:", *[f"- {reason}" for reason in result["pass_reasons"]]])
     if result.get("fail_reasons"):
@@ -236,13 +366,31 @@ def _format_rich(result: Mapping[str, Any]) -> str:
         ("연간 EPS CAGR", _pct(result.get("annual_eps_cagr"))),
         ("매출 성장률", _pct(result.get("revenue_growth"))),
         ("ROE", _pct(result.get("roe"))),
-        ("RS Rating", str(result.get("rs_rating", "N/A"))),
+        ("RS Rating", _fmt_rating(result.get("rs_rating"))),
         ("52주 고가 대비", _pct(result.get("price_vs_52w_high"))),
         ("시가총액", _money(result.get("market_cap"))),
     ]
     for label, val in metrics:
         val_display = f"[bright_white]{val}[/bright_white]" if val != "N/A" else "[dim]N/A[/dim]"
         lines.append(f"    [dim]•[/dim] {label:<16} {val_display}")
+    lines.append("")
+
+    # ── Setup ──────────────────────────────────────────────────────
+    lines.append("  [bold underline bright_cyan]셋업 상태[/bold underline bright_cyan]")
+    setup_status = result.get("setup_status", "N/A")
+    setup_type = result.get("setup_type", "N/A")
+    pivot = _fmt_price(result.get("pivot_price"))
+    current = _fmt_price(result.get("current_price"))
+    distance = _fmt_num(result.get("pivot_distance_pct"), 2)
+    volume_ratio = _fmt_ratio(result.get("breakout_volume_ratio"))
+    lines.append(f"    [dim]•[/dim] 상태             [bright_white]{setup_status}[/bright_white]")
+    lines.append(f"    [dim]•[/dim] 유형             [bright_white]{setup_type}[/bright_white]")
+    lines.append(f"    [dim]•[/dim] Pivot 후보       [bright_white]{pivot}[/bright_white]")
+    lines.append(f"    [dim]•[/dim] 현재가           [bright_white]{current}[/bright_white]")
+    lines.append(f"    [dim]•[/dim] Pivot 대비       [bright_white]{distance}%[/bright_white]")
+    lines.append(f"    [dim]•[/dim] 돌파 거래량       [bright_white]{volume_ratio}[/bright_white]")
+    for reason in result.get("setup_reasons", [])[:3]:
+        lines.append(f"      [dim]- {reason}[/dim]")
     lines.append("")
 
     # ── Trade plan ─────────────────────────────────────────────────
@@ -252,17 +400,24 @@ def _format_rich(result: Mapping[str, Any]) -> str:
     stop = result.get("stop_loss_price", "N/A")
     profit_low = result.get("profit_target_low", "N/A")
     profit_high = result.get("profit_target_high", "N/A")
-    lines.append(f"    [dim]•[/dim] 매수 구간       [bright_green]{buy_low}[/bright_green] ~ [bright_green]{buy_high}[/bright_green]")
+    if buy_low is None and buy_high is None:
+        lines.append("    [dim]•[/dim] 현재 유효한 매수 구간 없음")
+    else:
+        lines.append(f"    [dim]•[/dim] 매수 구간       [bright_green]{buy_low}[/bright_green] ~ [bright_green]{buy_high}[/bright_green]")
     lines.append(f"    [dim]•[/dim] 손절가          [bright_red]{stop}[/bright_red]")
     lines.append(f"    [dim]•[/dim] 목표 수익       [bright_yellow]{profit_low}[/bright_yellow] ~ [bright_yellow]{profit_high}[/bright_yellow]")
     lines.append("")
 
     # ── Institutional / insider ────────────────────────────────────
     lines.append("  [bold underline bright_cyan]기관/내부자[/bold underline bright_cyan]")
-    inst_holders = result.get("institutional_holders", "N/A")
-    accum = result.get("institutional_accumulation_score", "N/A")
+    inst_ownership = _pct(result.get("institutional_ownership"))
+    inst_holders = _fmt_num(result.get("institutional_holders"), 0)
+    inst_source = result.get("institutional_data_source", "N/A")
+    accum = _fmt_num(result.get("institutional_accumulation_score"), 1)
     insider = result.get("insider_signal", "N/A")
+    lines.append(f"    [dim]•[/dim] 기관 보유율      {inst_ownership}")
     lines.append(f"    [dim]•[/dim] 기관 보유자      {inst_holders}")
+    lines.append(f"    [dim]•[/dim] 기관 데이터 출처  {inst_source}")
     lines.append(f"    [dim]•[/dim] 13F 축적 점수    {accum}")
     lines.append(f"    [dim]•[/dim] 내부자 신호      {insider}")
 

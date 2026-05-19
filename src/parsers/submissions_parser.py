@@ -12,6 +12,7 @@ from typing import Dict, List, Any, Optional
 import glob
 
 from src.utils.logger import setup_logger
+from src.utils.ticker_mapper import TickerMapper
 
 # Set up logger
 logger = setup_logger("submissions_parser")
@@ -56,8 +57,11 @@ class SubmissionsParser:
         Returns:
             DataFrame with company index
         """
-        # Skip if index exists and not forced
-        if os.path.exists(self.companies_index_file) and not force:
+        refresh_tickers = self.config.get("ticker_mapping", {}).get("force_refresh_on_cached_companies", False)
+
+        # Skip if index exists and not forced. When ticker refresh is enabled, rebuild
+        # the index so cached companies.json receives the latest CIK/ticker mapping.
+        if os.path.exists(self.companies_index_file) and not force and not refresh_tickers:
             logger.info("Using existing company index")
             return pd.read_parquet(self.companies_index_file)
         
@@ -80,6 +84,16 @@ class SubmissionsParser:
             companies_data = json.load(f)
         
         logger.info(f"Loaded data for {len(companies_data)} companies")
+
+        if refresh_tickers:
+            before = json.dumps(companies_data, sort_keys=True)
+            ticker_mapper = TickerMapper(self.config)
+            ticker_mapper.download_mapping(force=True)
+            companies_data = ticker_mapper.enrich_companies_with_tickers(companies_data)
+            if before != json.dumps(companies_data, sort_keys=True):
+                with open(companies_json, 'w') as f:
+                    json.dump(companies_data, f, indent=2)
+                logger.info("Refreshed companies.json ticker mappings before indexing")
         
         # Create DataFrame from companies data
         companies = []
