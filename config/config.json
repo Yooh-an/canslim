@@ -144,9 +144,9 @@
     ]
   },
   "insider_data": {
-    "_comment": "무료 SEC Form 4 내부자 거래 보조 신호. fetch_live=true이면 SEC에서 Form 4를 내려받습니다. 대량 SEC 호출을 피하려면 company_ciks를 지정하세요.",
-    "enabled": true,
-    "fetch_live": true,
+    "_comment": "무료 SEC Form 4 내부자 거래 보조 신호. 기본 스크리너에서는 낮은 커버리지로 인한 오판을 막기 위해 비활성화합니다. 필요한 경우 후보군 CIK를 지정해 수동 활성화하세요.",
+    "enabled": false,
+    "fetch_live": false,
     "raw_form4_dir": "data/raw/insider_form4",
     "company_ciks": [],
     "limit_per_company": 20

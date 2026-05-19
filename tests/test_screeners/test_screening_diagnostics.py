@@ -68,6 +68,16 @@ def test_score_companies_for_diagnostics_populates_canslim_score_before_filterin
     assert scored[0]["score_band"]
 
 
+def test_collect_data_quality_warnings_omits_insider_when_disabled():
+    warnings = _collect_data_quality_warnings(
+        {"market_cap": 10, "insider_buy_count_90d": 0, "net_insider_buy_value_90d": 0},
+        total=10,
+        config={"insider_data": {"enabled": False}},
+    )
+
+    assert not any("내부자 Form 4" in warning for warning in warnings)
+
+
 def test_collect_data_quality_warnings_flags_low_market_cap_and_missing_insider_data():
     warnings = _collect_data_quality_warnings(
         {"market_cap": 1, "insider_buy_count_90d": 0, "net_insider_buy_value_90d": 0},

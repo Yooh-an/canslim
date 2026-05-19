@@ -97,14 +97,14 @@ class TestPureProfileLogic(unittest.TestCase):
         self.assertTrue(_check_institutional({"institutional_accumulation_score": 75}, criteria))
         self.assertFalse(_check_institutional({"institutional_accumulation_score": 40}, criteria))
 
-    def test_pattern_requires_real_new_high_or_breakout_signal(self):
+    def test_pattern_requires_actionable_setup_not_new_high_alone(self):
         criteria = {
             "require_new_high_or_breakout": True,
             "allow_near_pivot_setup": True,
             "price_vs_52w_high_hard_min": 0.90,
             "breakout_pct_min": -0.02,
         }
-        self.assertTrue(_check_pattern({"new_52w_high": True}, criteria))
+        self.assertFalse(_check_pattern({"new_52w_high": True}, criteria))
         self.assertTrue(_check_pattern({"valid_breakout": True}, criteria))
         self.assertTrue(
             _check_pattern(
@@ -254,7 +254,8 @@ class TestPureProfileLogic(unittest.TestCase):
             "market_outperformance_12m": 0.05,
             "up_down_volume_ratio_50d": 1.2,
             "volume_trend_50_200": 1.0,
-            "new_52w_high": True,
+            "near_pivot": True,
+            "breakout_pct": -0.01,
         }
 
         filtered, counts = _filter_screening_candidates(
@@ -272,7 +273,7 @@ class TestPureProfileLogic(unittest.TestCase):
             {"rs_rating_min": 80, "price_vs_52w_high_min": 0.85, "avg_dollar_volume_min": 15_000_000},
             {"require_supply_demand": True, "up_down_volume_ratio_min": 1.0, "volume_trend_50_200_min": 0.9},
             {"require_institutional_sponsorship": False},
-            {"require_new_high_or_breakout": True},
+            {"require_new_high_or_breakout": True, "allow_near_pivot_setup": True},
             market_direction_ok=True,
             test_mode=False,
         )
@@ -293,7 +294,8 @@ class TestPureProfileLogic(unittest.TestCase):
             "market_outperformance_12m": 0.10,
             "up_down_volume_ratio_50d": 1.4,
             "volume_trend_50_200": 1.1,
-            "new_52w_high": True,
+            "near_pivot": True,
+            "breakout_pct": -0.01,
         }
         standard_company = {**ipo_company, "ticker": "STD", "security_profile": "standard"}
 
@@ -313,7 +315,7 @@ class TestPureProfileLogic(unittest.TestCase):
             {"rs_rating_min": 80, "price_vs_52w_high_min": 0.85, "avg_dollar_volume_min": 10_000_000},
             {"require_supply_demand": True, "up_down_volume_ratio_min": 1.0, "volume_trend_50_200_min": 0.8},
             {"require_institutional_sponsorship": False},
-            {"require_new_high_or_breakout": True},
+            {"require_new_high_or_breakout": True, "allow_near_pivot_setup": True},
             market_direction_ok=True,
             test_mode=False,
         )

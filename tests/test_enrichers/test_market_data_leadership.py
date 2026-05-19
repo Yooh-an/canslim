@@ -19,6 +19,24 @@ def test_single_leadership_metrics_flags_rs_line_new_high():
     assert metrics["rs_line_pct_from_high"] == 0
 
 
+def test_single_leadership_metrics_tracks_recent_52w_high_separately_from_latest_close():
+    enricher = MarketDataEnricher({"market_data": {"recent_new_high_lookback_days": 10}})
+    dates = pd.date_range("2025-01-01", periods=260, freq="B")
+    close_values = list(range(100, 350)) + [360, 355, 352, 350, 348, 346, 344, 342, 340, 338]
+    high_values = close_values.copy()
+    high_values[-10] = 365
+    history = pd.DataFrame(
+        {"Close": close_values, "High": high_values, "Volume": [1_000_000] * 260},
+        index=dates,
+    )
+
+    metrics = enricher._calculate_single_leadership_metrics(history, None)
+
+    assert metrics["new_52w_high"] is False
+    assert metrics["recent_new_52w_high"] is True
+    assert metrics["recent_new_52w_high_days_ago"] == 9
+
+
 def test_enrich_single_ticker_market_data_uses_price_history_and_market_cap_fallback(tmp_path):
     enricher = MarketDataEnricher({
         "data_paths": {"raw_data_dir": str(tmp_path), "processed_data_dir": str(tmp_path)},
@@ -70,6 +88,40 @@ def test_market_enrichment_refetches_cached_ticker_missing_market_cap_and_preser
     assert enriched[0]["market_cap_source"] == "yfinance"
     assert enriched[0]["rs_rating"] == 79.0
     assert enriched[0]["price_vs_52w_high"] == 0.99
+
+
+def test_calculate_leadership_metrics_uses_cached_industry_for_ranking(tmp_path):
+    enricher = MarketDataEnricher({
+        "data_paths": {"raw_data_dir": str(tmp_path / "raw"), "processed_data_dir": str(tmp_path)},
+        "market_data": {"leadership_universe_size": None, "leadership_period": "15mo", "leadership_chunk_size": 25},
+    })
+    companies = [
+        {"ticker": "AAA", "quarterly_eps_growth": 0.30},
+        {"ticker": "BBB", "quarterly_eps_growth": 0.30},
+        {"ticker": "CCC", "quarterly_eps_growth": 0.30},
+    ]
+    cached_market_data = {
+        "AAA": {"ticker": "AAA", "industry": "Software"},
+        "BBB": {"ticker": "BBB", "sector": "Retail"},
+        "CCC": {"ticker": "CCC", "industry": "Software"},
+    }
+
+    dates = pd.date_range("2025-01-01", periods=2, freq="B")
+    benchmark = pd.DataFrame({"Close": [100, 101]}, index=dates)
+    score_inputs = {"AAA": {"score": 0.60}, "BBB": {"score": 0.10}, "CCC": {"score": 0.30}}
+    enricher._load_market_data_files = lambda directory: cached_market_data
+    enricher._download_price_history = lambda tickers, period, chunk_size, cached_only=False: score_inputs
+    enricher._download_single_history = lambda ticker, period: benchmark
+    enricher._calculate_single_leadership_metrics = lambda history, benchmark_close: {"rs_score": history["score"]}
+    enricher._save_market_data_file = lambda ticker, data: None
+
+    metrics = enricher._calculate_leadership_metrics(companies)
+
+    assert metrics["AAA"]["industry_group"] == "Software"
+    assert metrics["BBB"]["industry_group"] == "Retail"
+    assert metrics["AAA"]["industry_rs_rank"] > metrics["BBB"]["industry_rs_rank"]
+    assert metrics["AAA"]["industry_stock_leader"] is True
+    assert metrics["CCC"]["industry_stock_leader"] is False
 
 
 def test_add_industry_ranks_marks_top_groups_and_leaders():

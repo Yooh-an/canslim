@@ -103,6 +103,21 @@ def test_institutional_score_respects_max_ownership_overowned_names():
     assert "I: institutional ownership above maximum" in scored["fail_reasons"]
 
 
+def test_calculate_canslim_score_does_not_treat_new_high_alone_as_actionable_n():
+    scored = calculate_canslim_score(
+        dict(PASSING_COMPANY, new_52w_high=True, recent_new_52w_high=True, valid_breakout=False, near_pivot=False),
+        CRITERIA,
+        LEADERSHIP,
+        SUPPLY,
+        INSTITUTIONAL,
+        PATTERN,
+        market_direction_ok=True,
+    )
+
+    assert scored["n_score"] < 80
+    assert "N: recent high but no actionable pivot/breakout setup" in scored["fail_reasons"]
+
+
 def test_calculate_canslim_score_records_fail_reasons_for_weak_candidate():
     weak = dict(PASSING_COMPANY, quarterly_eps_growth=-0.10, rs_rating=55, new_52w_high=False, valid_breakout=False)
 

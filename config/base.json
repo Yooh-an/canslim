@@ -63,8 +63,8 @@
     ]
   },
   "insider_data": {
-    "enabled": true,
-    "fetch_live": true,
+    "enabled": false,
+    "fetch_live": false,
     "raw_form4_dir": "data/raw/insider_form4",
     "company_ciks": [],
     "limit_per_company": 20

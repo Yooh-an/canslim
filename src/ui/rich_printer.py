@@ -125,6 +125,7 @@ def print_metrics_stats(
     total: int,
     *,
     signal_counts: Dict[str, int] | None = None,
+    include_insider: bool = True,
 ) -> None:
     """Print data availability as a compact bar chart table.
 
@@ -159,9 +160,11 @@ def print_metrics_stats(
         ],
         "🎯 스코어/패턴": [
             "canslim_score", "breakout_volume_ratio",
-            "new_52w_high", "near_pivot", "valid_breakout",
+            "new_52w_high", "recent_new_52w_high", "near_pivot", "valid_breakout",
         ],
     }
+    if not include_insider:
+        groups.pop("🕵️ 내부자", None)
 
     table = Table(
         show_header=True,
@@ -253,7 +256,7 @@ def print_criteria_breakdown(
         "market_direction": "🧭 시장 방향",
         "supply_demand": "📦 수급",
         "institutional": "🏛️ 기관",
-        "new_high": "🔝 신고가",
+        "new_high": "🎯 N 셋업",
         "base": "🏗️ 베이스 패턴",
         "breakout": "🚀 돌파",
     }

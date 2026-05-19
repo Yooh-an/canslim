@@ -161,12 +161,11 @@ def _check_pattern(company: Dict[str, Any], criteria: Dict[str, Any]) -> bool:
             and breakout_pct >= criteria.get("breakout_pct_min", -0.02)
         )
         new_high_ok = (
-            bool(company.get("new_52w_high", False))
-            or bool(company.get("valid_breakout", False))
+            bool(company.get("valid_breakout", False))
             or (criteria.get("allow_near_pivot_setup", False) and pivot_ready)
         )
     elif criteria.get("require_new_52w_high", False):
-        new_high_ok = bool(company.get("new_52w_high", False))
+        new_high_ok = bool(company.get("recent_new_52w_high", False))
 
     base_ok = True
     base_depth = company.get("base_depth_65d")

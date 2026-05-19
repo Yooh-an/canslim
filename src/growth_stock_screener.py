@@ -237,7 +237,7 @@ def parse_data(config):
 
 
 POSITIVE_VALUE_METRICS = {"market_cap", "avg_dollar_volume_50d"}
-BOOLEAN_SIGNAL_METRICS = {"new_52w_high", "near_pivot", "valid_breakout"}
+BOOLEAN_SIGNAL_METRICS = {"new_52w_high", "recent_new_52w_high", "near_pivot", "valid_breakout"}
 
 
 METRICS_FOR_COVERAGE = [
@@ -268,6 +268,7 @@ METRICS_FOR_COVERAGE = [
     "canslim_score",
     "breakout_volume_ratio",
     "new_52w_high",
+    "recent_new_52w_high",
     "near_pivot",
     "valid_breakout",
 ]
@@ -474,7 +475,12 @@ def screen_stocks(config):
 
         # Financial metrics statistics: availability, not bullish pass counts.
         metrics_counts, signal_counts = _calculate_metric_coverage(companies)
-        print_metrics_stats(metrics_counts, len(companies), signal_counts=signal_counts)
+        print_metrics_stats(
+            metrics_counts,
+            len(companies),
+            signal_counts=signal_counts,
+            include_insider=bool(config.get("insider_data", {}).get("enabled", False)),
+        )
         data_quality_warnings = _collect_data_quality_warnings(metrics_counts, len(companies), config)
         for warning in data_quality_warnings:
             logger.warning(warning)

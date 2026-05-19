@@ -172,6 +172,8 @@ class MarketDataEnricher:
                     "volume_dry_up_ratio_10_50",
                     "breakout_volume_ratio",
                     "new_52w_high",
+                    "recent_new_52w_high",
+                    "recent_new_52w_high_days_ago",
                     "new_20d_high",
                     "base_depth_65d",
                     "base_tightness_3w",
@@ -263,6 +265,8 @@ class MarketDataEnricher:
             "volume_dry_up_ratio_10_50",
             "breakout_volume_ratio",
             "new_52w_high",
+            "recent_new_52w_high",
+            "recent_new_52w_high_days_ago",
             "new_20d_high",
             "base_depth_65d",
             "base_tightness_3w",
@@ -431,6 +435,7 @@ class MarketDataEnricher:
             for company in metric_universe
         }
         tickers = list(ticker_to_company.keys())
+        cached_market_data = self._load_market_data_files(self.market_data_dir)
         benchmark = market_data_config.get("leadership_benchmark", "SPY")
         period = market_data_config.get("leadership_period", "15mo")
         chunk_size = market_data_config.get("leadership_chunk_size", 100)
@@ -451,6 +456,8 @@ class MarketDataEnricher:
             metrics = self._calculate_single_leadership_metrics(history, benchmark_close)
             if metrics:
                 group = self._industry_group_for_company(ticker_to_company[ticker])
+                if not group:
+                    group = self._industry_group_for_company(cached_market_data.get(ticker, {}))
                 metrics["ticker"] = ticker
                 if group:
                     metrics["industry_group"] = group
@@ -461,7 +468,6 @@ class MarketDataEnricher:
         self._add_percentile_ranks(results, "rs_score", "rs_rating", scale=99)
         self._add_industry_ranks(results)
 
-        cached_market_data = self._load_market_data_files(self.market_data_dir)
         for ticker, metrics in results.items():
             cached = cached_market_data.get(ticker, {})
             cached.update(metrics)
@@ -811,9 +817,23 @@ class MarketDataEnricher:
             + 0.2 * returns["price_return_12m"]
         )
 
-        high_52w = close.tail(252).max()
+        high = self._history_series(history, "High")
+        high_source = high if not high.empty else close
+        high_52w_series = high_source.tail(252)
+        high_52w = high_52w_series.max()
         price_vs_52w_high = close.iloc[-1] / high_52w if high_52w and high_52w > 0 else np.nan
-        high_20d = close.tail(20).max()
+        high_20d = high_source.tail(20).max()
+        recent_new_high_lookback = int(
+            self.config.get("market_data", {}).get("recent_new_high_lookback_days", 10) or 0
+        )
+        recent_new_high = False
+        recent_new_high_days_ago = np.nan
+        if recent_new_high_lookback > 0 and pd.notna(high_52w) and high_52w > 0:
+            recent_window = high_52w_series.tail(recent_new_high_lookback)
+            recent_matches = recent_window[recent_window >= high_52w * 0.995]
+            if not recent_matches.empty:
+                recent_new_high = True
+                recent_new_high_days_ago = int(len(high_source) - 1 - high_source.index.get_loc(recent_matches.index[-1]))
         base_window = close.tail(65)
         base_depth = (base_window.max() - base_window.min()) / base_window.max() if len(base_window) >= 30 and base_window.max() > 0 else np.nan
         base_tightness = float(close.pct_change().tail(15).std()) if len(close) >= 20 else np.nan
@@ -826,6 +846,8 @@ class MarketDataEnricher:
             "rs_score": rs_score,
             "price_vs_52w_high": price_vs_52w_high,
             "new_52w_high": bool(close.iloc[-1] >= high_52w * 0.995) if pd.notna(high_52w) and high_52w > 0 else False,
+            "recent_new_52w_high": recent_new_high,
+            "recent_new_52w_high_days_ago": recent_new_high_days_ago,
             "new_20d_high": bool(close.iloc[-1] >= high_20d * 0.995) if pd.notna(high_20d) and high_20d > 0 else False,
             "base_depth_65d": float(base_depth) if pd.notna(base_depth) else np.nan,
             "base_tightness_3w": base_tightness,

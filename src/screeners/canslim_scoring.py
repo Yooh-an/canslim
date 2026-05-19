@@ -75,16 +75,16 @@ def _score_annual_earnings(company: Mapping[str, Any], criteria: Mapping[str, An
 
 
 def _score_new(company: Mapping[str, Any], pattern_criteria: Mapping[str, Any]) -> tuple[float, list[str], list[str]]:
-    if company.get("new_52w_high"):
-        return 100.0, ["N: new 52-week high"], []
     if company.get("valid_breakout"):
-        return 90.0, ["N: valid breakout"], []
+        return 95.0, ["N: valid breakout"], []
     price_vs_high = _num(company.get("price_vs_52w_high"))
     hard_min = _num(pattern_criteria.get("price_vs_52w_high_hard_min", 0.90), 0.90)
     if company.get("near_pivot") and price_vs_high >= hard_min:
-        return 75.0, ["N: near pivot close to highs"], []
+        return 85.0, ["N: near pivot close to highs"], []
+    if company.get("recent_new_52w_high") or company.get("new_52w_high"):
+        return 65.0, [], ["N: recent high but no actionable pivot/breakout setup"]
     score = max(0.0, min(60.0, price_vs_high / hard_min * 60.0 if hard_min > 0 else 0.0))
-    return score, [], ["N: no new-high, pivot, or breakout signal"]
+    return score, [], ["N: no actionable pivot or breakout setup"]
 
 
 def _score_supply_demand(company: Mapping[str, Any], criteria: Mapping[str, Any]) -> tuple[float, list[str], list[str]]:
