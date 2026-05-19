@@ -9,7 +9,9 @@ from typing import Any, Dict, Mapping
 
 import pandas as pd
 
+from src.api.sec_client import SECClient
 from src.collectors.institutional_collector import enrich_companies_with_13f_data
+from src.collectors.insider_collector import enrich_companies_with_insider_data
 from src.enrichers.fundamental_fallback import enrich_company_fundamentals
 from src.enrichers.market_data_enricher import MarketDataEnricher
 from src.parsers.facts_parser import XBRLFactsParser
@@ -77,6 +79,7 @@ SEC_REFRESH_FIELDS = [
     "revenue_year_ago",
     "revenue_period",
     "profit_margin",
+    "profit_margin_source",
     "assets",
     "liabilities",
     "equity",
@@ -166,6 +169,29 @@ def _enrich_single_ticker_institutional(company: Dict[str, Any], config: Mapping
     return company
 
 
+def _enrich_single_ticker_insider(company: Dict[str, Any], config: Mapping[str, Any]) -> Dict[str, Any]:
+    insider_config = config.get("insider_data", {})
+    if not insider_config.get("enabled", False):
+        return company
+    sec_client = None
+    if insider_config.get("fetch_live", False) and company.get("cik"):
+        try:
+            sec_api = config.get("sec_api", {})
+            sec_client = SECClient(
+                user_agent=sec_api.get("user_agent"),
+                rate_limit_delay=sec_api.get("rate_limit_delay", 0.1),
+            )
+        except Exception:
+            sec_client = None
+    try:
+        enriched = enrich_companies_with_insider_data([company], config, sec_client=sec_client)
+    except Exception:
+        return company
+    if enriched:
+        return dict(enriched[0])
+    return company
+
+
 def _market_direction_ok(config: Mapping[str, Any]) -> tuple[bool, Dict[str, Any]]:
     market_criteria = config.get("market_direction", {})
     if not market_criteria.get("required", False):
@@ -200,6 +226,7 @@ def analyze_ticker(ticker: str, config: Mapping[str, Any]) -> Dict[str, Any]:
         market_config["_quiet"] = True
         company = MarketDataEnricher(market_config).enrich_single_ticker_market_data(company)
     company = _enrich_single_ticker_institutional(company, config)
+    company = _enrich_single_ticker_insider(company, config)
 
     criteria = config.get("screening_criteria", {})
     leadership_criteria = config.get("leadership_criteria", {})

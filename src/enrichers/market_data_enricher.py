@@ -41,7 +41,6 @@ class MarketDataEnricher:
         """
         self.config = config
         self.quiet = bool(config.get("_quiet", False))
-        self.api_key = config.get("optional_api_keys", {}).get("fmp_api_key")
         
         logger.info("Using yfinance market data with SEC fallback")
         

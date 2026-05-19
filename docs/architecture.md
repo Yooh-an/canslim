@@ -171,7 +171,7 @@ growth-stock-screener/
 - **외부 API**:
   - SEC EDGAR API: 재무 데이터 소스
   - yfinance: 주가 데이터 소스
-  - FMP API(선택적): 기관 소유 비율 데이터
+  - SimFin API(선택적): SEC 누락 재무지표 보강
 
 - **주요 라이브러리**:
   - pandas: 데이터 처리 및 분석

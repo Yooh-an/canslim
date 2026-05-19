@@ -125,13 +125,14 @@ Current configuration uses these top-level sections:
   "supply_demand_criteria": {},
   "institutional_criteria": {},
   "institutional_data": {
-    "enabled": false,
+    "enabled": true,
     "raw_13f_dir": "data/raw/institutional_13f",
     "cusip_ticker_mapping": "data/processed/cusip_ticker_mapping.csv",
-    "manager_ciks": []
+    "manager_ciks": ["0001067983", "0000102909", "0001364742"]
   },
   "insider_data": {
-    "enabled": false,
+    "enabled": true,
+    "fetch_live": true,
     "raw_form4_dir": "data/raw/insider_form4",
     "company_ciks": [],
     "limit_per_company": 20
@@ -192,7 +193,7 @@ Price enrichment includes CAN SLIM leadership metrics such as `rs_rating`, `rs_l
 ```text
 config/                 Configuration files and strategy profiles
 docs/                   Architecture and SEC API notes
-src/api/                SEC/FMP client modules
+src/api/                SEC and SimFin client modules
 src/collectors/         SEC/company data collection
 src/parsers/            Submissions and company facts parsing
 src/enrichers/          Market, RS, volume, and institutional enrichment

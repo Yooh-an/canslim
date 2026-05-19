@@ -49,11 +49,22 @@
     "enabled": true,
     "raw_13f_dir": "data/raw/institutional_13f",
     "cusip_ticker_mapping": "data/processed/cusip_ticker_mapping.csv",
-    "manager_ciks": []
+    "manager_ciks": [
+      "0001067983",
+      "0000102909",
+      "0001364742",
+      "0000315066",
+      "0001037389",
+      "0001423053",
+      "0001273087",
+      "0001603465",
+      "0001166559",
+      "0001468158"
+    ]
   },
   "insider_data": {
     "enabled": true,
-    "fetch_live": false,
+    "fetch_live": true,
     "raw_form4_dir": "data/raw/insider_form4",
     "company_ciks": [],
     "limit_per_company": 20
@@ -62,7 +73,6 @@
     "market_cap_min_coverage": 0.5
   },
   "optional_api_keys": {
-    "fmp_api_key": null,
     "simfin_api_key": null
   },
   "fundamental_data": {

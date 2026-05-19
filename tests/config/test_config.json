@@ -28,9 +28,7 @@
     "outperform_sp500": true,
     "min_market_cap": 100000000
   },
-  "optional_api_keys": {
-    "fmp_api_key": "test_api_key"
-  },
+  "optional_api_keys": {},
   "logging": {
     "level": "INFO",
     "log_file": "tests/test_data/logs/test.log"

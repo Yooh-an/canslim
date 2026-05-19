@@ -184,6 +184,44 @@ def test_analyze_ticker_applies_local_13f_institutional_enrichment(tmp_path):
     enrich_13f.assert_called_once()
 
 
+def test_analyze_ticker_applies_local_form4_insider_enrichment(tmp_path):
+    cfg = _config(tmp_path)
+    cfg["insider_data"] = {"enabled": True, "fetch_live": False}
+    company = _company()
+    (Path(cfg["data_paths"]["processed_data_dir"]) / "companies_list_enriched.json").write_text(json.dumps([company]))
+    (Path(cfg["data_paths"]["processed_data_dir"]) / "market_direction.json").write_text(json.dumps({"market_direction_status": "confirmed_uptrend"}))
+
+    from unittest.mock import patch
+    with patch("src.screeners.ticker_analysis.enrich_companies_with_insider_data") as enrich_insider:
+        enrich_insider.return_value = [{**company, "insider_signal": "net_buying", "insider_buy_count_90d": 2, "insider_data_source": "sec_form4"}]
+        result = analyze_ticker("TEST", cfg)
+
+    assert result["insider_signal"] == "net_buying"
+    assert result["insider_buy_count_90d"] == 2
+    assert result["insider_data_source"] == "sec_form4"
+    enrich_insider.assert_called_once()
+
+
+def test_analyze_ticker_fetches_live_form4_for_one_ticker_when_enabled(tmp_path):
+    cfg = _config(tmp_path)
+    cfg["insider_data"] = {"enabled": True, "fetch_live": True, "limit_per_company": 3}
+    cfg["sec_api"] = {"user_agent": "tester@example.com", "rate_limit_delay": 0.01}
+    company = {**_company(), "cik": "123456"}
+    (Path(cfg["data_paths"]["processed_data_dir"]) / "companies_list_enriched.json").write_text(json.dumps([company]))
+    (Path(cfg["data_paths"]["processed_data_dir"]) / "market_direction.json").write_text(json.dumps({"market_direction_status": "confirmed_uptrend"}))
+
+    from unittest.mock import patch
+    with patch("src.screeners.ticker_analysis.SECClient") as sec_client_cls, patch("src.screeners.ticker_analysis.enrich_companies_with_insider_data") as enrich_insider:
+        sec_client = sec_client_cls.return_value
+        enrich_insider.return_value = [{**company, "insider_signal": "net_selling", "insider_sell_count_90d": 1, "insider_data_source": "sec_form4"}]
+        result = analyze_ticker("TEST", cfg)
+
+    assert result["insider_signal"] == "net_selling"
+    sec_client_cls.assert_called_once_with(user_agent="tester@example.com", rate_limit_delay=0.01)
+    enrich_insider.assert_called_once()
+    assert enrich_insider.call_args.kwargs["sec_client"] is sec_client
+
+
 def test_analyze_ticker_enriches_when_current_price_or_institutional_data_missing(tmp_path):
     cfg = _config(tmp_path)
     company = _company()

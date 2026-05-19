@@ -21,7 +21,7 @@
     "price_vs_52w_high_min": 0.80,
     "avg_dollar_volume_min": 15000000,
     "rs_line_near_high": false,
-    "require_industry_leadership": false
+    "require_industry_leadership": true
   },
   "supply_demand_criteria": {
     "require_supply_demand": true,

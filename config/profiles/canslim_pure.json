@@ -22,7 +22,7 @@
     "avg_dollar_volume_min": 15000000,
     "rs_line_near_high": true,
     "rs_line_high_threshold": 0.95,
-    "require_industry_leadership": false
+    "require_industry_leadership": true
   },
   "market_direction": {
     "required": true,

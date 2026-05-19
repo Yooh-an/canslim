@@ -65,10 +65,10 @@
     "rs_line_near_high": true,
     "_rs_line_threshold_note": "rs_line_high_threshold=0.95는 RS line이 최근 252일 고점의 95% 이상이어야 한다는 뜻입니다.",
     "rs_line_high_threshold": 0.95,
-    "_industry_note": "industry_*는 업종 리더십 필터입니다. require_industry_leadership=false이면 실제 선별에는 쓰지 않습니다.",
+    "_industry_note": "industry_*는 업종 리더십 필터입니다. require_industry_leadership=true이면 업종/업종 내 주도주 기준을 실제 선별에 적용합니다.",
     "industry_rs_rank_min": 80,
     "industry_stock_rank_min": 80,
-    "require_industry_leadership": false
+    "require_industry_leadership": true
   },
   "market_direction": {
     "_comment": "CAN SLIM의 M(Market Direction). SPY 추세로 전체 시장 상태를 계산합니다.",
@@ -126,23 +126,33 @@
     "use_yfinance_info_fallback": true
   },
   "institutional_data": {
-    "_comment": "무료 SEC 13F 기반 기관 보유 추세. 기본 ON입니다. manager_ciks가 비어 있으면 raw_13f_dir/current 및 previous의 로컬 XML만 읽고, manager_ciks를 넣으면 최신/직전 13F를 내려받습니다.",
+    "_comment": "무료 SEC 13F 기반 기관 보유 추세. 기본 ON이며 manager_ciks의 주요 운용사 최신/직전 13F를 내려받습니다.",
     "enabled": true,
     "raw_13f_dir": "data/raw/institutional_13f",
     "cusip_ticker_mapping": "data/processed/cusip_ticker_mapping.csv",
-    "manager_ciks": []
+    "manager_ciks": [
+      "0001067983",
+      "0000102909",
+      "0001364742",
+      "0000315066",
+      "0001037389",
+      "0001423053",
+      "0001273087",
+      "0001603465",
+      "0001166559",
+      "0001468158"
+    ]
   },
   "insider_data": {
-    "_comment": "무료 SEC Form 4 내부자 거래 보조 신호. 기본 ON이지만 fetch_live=false이면 로컬 raw_form4_dir XML만 읽습니다. 대량 SEC 호출을 원할 때만 fetch_live=true와 company_ciks를 지정하세요.",
+    "_comment": "무료 SEC Form 4 내부자 거래 보조 신호. fetch_live=true이면 SEC에서 Form 4를 내려받습니다. 대량 SEC 호출을 피하려면 company_ciks를 지정하세요.",
     "enabled": true,
-    "fetch_live": false,
+    "fetch_live": true,
     "raw_form4_dir": "data/raw/insider_form4",
     "company_ciks": [],
     "limit_per_company": 20
   },
   "optional_api_keys": {
     "_comment": "선택 API 키. SimFin 키는 .env의 simfin_API_key 또는 SIMFIN_API_KEY에서도 읽습니다.",
-    "fmp_api_key": null,
     "simfin_api_key": null
   },
   "fundamental_data": {

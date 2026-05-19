@@ -76,7 +76,7 @@
   - [x] Calculate performance metrics against S&P 500
   - [x] Implement market outperformance filter
 - [x] Implement optional institutional ownership module
-  - [x] Create FMP API client for ownership data
+  - [x] Use SEC 13F-based ownership data
   - [x] Add institutional ownership filter
 - [x] Create results formatter
   - [x] Implement sorting capabilities
