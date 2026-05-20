@@ -5,20 +5,20 @@
     "output_file": "data/processed/results_canslim_score_rank.csv"
   },
   "screening_criteria": {
-    "_comment": "Require non-negative growth and valid data, while keeping thresholds loose (0.0) for ranking.",
-    "quarterly_eps_growth": 0.0,
-    "annual_eps_cagr": 0.0,
-    "revenue_growth": 0.0,
-    "profit_margin": 0.0,
-    "roe": 0.0,
+    "_comment": "Tier 3: Broad scoring and ranking profile. Filters out low-quality/declining stocks while ranking actual growth candidates.",
+    "quarterly_eps_growth": 0.10,
+    "annual_eps_cagr": 0.10,
+    "revenue_growth": 0.08,
+    "profit_margin": 0.03,
+    "roe": 0.10,
     "debt_to_equity": 3.0,
     "outperform_sp500": true,
     "min_market_cap": 300000000
   },
   "leadership_criteria": {
-    "rs_rating_min": 70,
-    "price_vs_52w_high_min": 0.80,
-    "avg_dollar_volume_min": 10000000,
+    "rs_rating_min": 60,
+    "price_vs_52w_high_min": 0.75,
+    "avg_dollar_volume_min": 5000000,
     "rs_line_near_high": false,
     "require_industry_leadership": false
   },
