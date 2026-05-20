@@ -1,0 +1,41 @@
+{
+  "extends": "../base.json",
+  "profile_name": "canslim_score_rank",
+  "data_paths": {
+    "output_file": "data/processed/results_canslim_score_rank.csv"
+  },
+  "screening_criteria": {
+    "_comment": "No hard screening thresholds to allow ranking the entire universe by CAN SLIM score.",
+    "quarterly_eps_growth": -9.9,
+    "annual_eps_cagr": -9.9,
+    "revenue_growth": -9.9,
+    "profit_margin": -9.9,
+    "roe": -9.9,
+    "debt_to_equity": 999.0,
+    "outperform_sp500": false,
+    "min_market_cap": 0
+  },
+  "leadership_criteria": {
+    "rs_rating_min": 0,
+    "price_vs_52w_high_min": 0,
+    "avg_dollar_volume_min": 0,
+    "rs_line_near_high": false,
+    "require_industry_leadership": false
+  },
+  "market_direction": {
+    "required": false
+  },
+  "supply_demand_criteria": {
+    "require_supply_demand": false
+  },
+  "institutional_criteria": {
+    "require_institutional_sponsorship": false
+  },
+  "pattern_criteria": {
+    "require_new_high_or_breakout": false,
+    "require_new_52w_high": false,
+    "require_near_pivot": false,
+    "require_valid_breakout": false,
+    "require_base_depth": false
+  }
+}

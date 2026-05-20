@@ -584,6 +584,21 @@ class XBRLFactsParser:
                 logger.debug(f"연간 EPS CAGR({latest.get('fy')} vs {base.get('fy')}, {years}년): {growth}")
             else:
                 logger.debug(f"연간 EPS CAGR 계산에 필요한 양수 EPS 3년 이상 데이터 부족: {len(annual)}개")
+            
+            # Check consecutive annual EPS growth
+            consecutive_growth = False
+            if len(annual) >= 3:
+                # Ensure the elements have consecutive fiscal years and increasing values
+                # annual list is sorted descending by fiscal year (fy)
+                if len(annual) >= 4 and annual[0].get('fy') == annual[1].get('fy') + 1 == annual[2].get('fy') + 2 == annual[3].get('fy') + 3:
+                    consecutive_growth = (
+                        annual[0]['val'] > annual[1]['val'] > annual[2]['val'] > annual[3]['val']
+                    )
+                elif annual[0].get('fy') == annual[1].get('fy') + 1 == annual[2].get('fy') + 2:
+                    consecutive_growth = (
+                        annual[0]['val'] > annual[1]['val'] > annual[2]['val']
+                    )
+            metrics['annual_eps_consecutive_growth'] = consecutive_growth
     
     def _extract_revenue_metrics(self, us_gaap_facts: Dict[str, Any], metrics: Dict[str, Any]) -> None:
         """Extract Revenue metrics from us-gaap facts."""

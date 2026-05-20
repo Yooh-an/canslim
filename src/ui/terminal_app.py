@@ -29,7 +29,7 @@ from src.utils.pipeline_status import collect_pipeline_status, format_pipeline_s
 PROFILE_CHOICES = {
     "1": "canslim_pure",
     "2": "canslim_watchlist",
-    "3": "canslim_hybrid",
+    "3": "canslim_score_rank",
 }
 
 MENU_CHOICES = {
@@ -201,7 +201,7 @@ class TerminalApp:
             self.print("\n프로필 선택:")
             self.print("1. canslim_pure - 엄격한 CAN SLIM")
             self.print("2. canslim_watchlist - 넓은 후보군")
-            self.print("3. canslim_hybrid - 하이브리드")
+            self.print("3. canslim_score_rank - 전체 순위 정렬")
             choice = self.input(f"프로필 [기본: {default}]: ").strip()
             if not choice:
                 return default
@@ -210,7 +210,7 @@ class TerminalApp:
         profiles = [
             ("1", "canslim_pure", "엄격한 CAN SLIM", "🎯", "bright_red"),
             ("2", "canslim_watchlist", "넓은 후보군 (Watchlist)", "📋", "bright_yellow"),
-            ("3", "canslim_hybrid", "하이브리드 전략", "⚡", "bright_green"),
+            ("3", "canslim_score_rank", "전체 순위 정렬 (Score Rank)", "🏆", "bright_green"),
         ]
 
         table = Table(

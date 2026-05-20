@@ -13,6 +13,7 @@
     "roe": 0.17,
     "debt_to_equity": 2.0,
     "outperform_sp500": true,
+    "require_annual_consecutive_growth": true,
     "min_market_cap": 300000000
   },
   "leadership_criteria": {
@@ -22,7 +23,7 @@
     "avg_dollar_volume_min": 15000000,
     "rs_line_near_high": true,
     "rs_line_high_threshold": 0.95,
-    "require_industry_leadership": true
+    "require_industry_leadership": false
   },
   "market_direction": {
     "required": true,

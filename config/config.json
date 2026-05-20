@@ -92,7 +92,7 @@
     "require_institutional_sponsorship": false
   },
   "pattern_criteria": {
-    "_comment": "SEPA/CAN SLIM 차트 패턴 조건. 현재 require_*가 false라 필수 조건은 아니고 보조 지표로 계산됩니다.",
+    "_comment": "CAN SLIM 차트 패턴 조건. 현재 require_*가 false라 필수 조건은 아니고 보조 지표로 계산됩니다.",
     "_new_high_note": "require_new_52w_high=true이면 52주 신고가 근처 종목만 통과시킵니다.",
     "require_new_52w_high": false,
     "_pivot_note": "require_near_pivot=true이면 최근 pivot 가격 근처 종목만 통과시킵니다.",

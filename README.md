@@ -1,6 +1,6 @@
 # Growth Stock Screener
 
-A Python application for screening growth stocks with CAN SLIM and SEPA-style criteria using SEC EDGAR financial data and yfinance market data.
+A Python application for screening growth stocks with CAN SLIM criteria using SEC EDGAR financial data and yfinance market data.
 
 > This project is a research/screening aid only. Do not make investment decisions solely from its output.
 
@@ -79,9 +79,6 @@ Examples:
 python run_screener.py --mode enrich --config config/base.json --profile canslim_pure
 python run_screener.py --mode screen --config config/base.json --profile canslim_pure
 
-python run_screener.py --mode enrich --config config/base.json --profile canslim_hybrid
-python run_screener.py --mode screen --config config/base.json --profile canslim_hybrid
-
 python run_screener.py --mode screen --config config/base.json --profile canslim_watchlist
 ```
 
@@ -89,7 +86,6 @@ Available profiles:
 
 - `canslim_pure`: closer to canonical CAN SLIM requirements, including institutional sponsorship
 - `canslim_watchlist`: broader candidate list; institutional data contributes to score/report but is not a hard requirement
-- `canslim_hybrid`: CAN SLIM growth filters plus SEPA-style technical setup filters
 
 ## Configuration Shape
 
@@ -229,4 +225,3 @@ Current expected result:
 
 - [SEC EDGAR API Documentation](https://www.sec.gov/edgar/sec-api-documentation)
 - [CAN SLIM Investment Strategy](https://www.investors.com/ibd-university/can-slim/)
-- [Mark Minervini's Trend Template](https://www.minervini.com/blog/index.php/trend-template/)

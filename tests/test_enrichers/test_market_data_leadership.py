@@ -322,3 +322,4 @@ def test_add_industry_ranks_marks_top_groups_and_leaders():
     assert results["BBB"]["industry_group_leader"] is True
     assert results["BBB"]["industry_stock_leader"] is False
     assert results["CCC"]["industry_group_leader"] is False
+

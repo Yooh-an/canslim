@@ -204,6 +204,8 @@ class MarketDataEnricher:
                     "breakout_pct",
                     "near_pivot",
                     "valid_breakout",
+                    "sma_50",
+                    "sma_200",
                     "sector",
                     "industry",
                     "sic",
@@ -301,6 +303,8 @@ class MarketDataEnricher:
             "breakout_pct",
             "near_pivot",
             "valid_breakout",
+            "sma_50",
+            "sma_200",
             "industry_rs_rank",
             "industry_stock_rank",
             "industry_group_leader",
@@ -911,6 +915,10 @@ class MarketDataEnricher:
         pivot_price = float(pivot_window.max()) if not pivot_window.empty else np.nan
         breakout_pct = float(close.iloc[-1] / pivot_price - 1) if pd.notna(pivot_price) and pivot_price > 0 else np.nan
 
+        # Moving average calculations for general technical trend analysis
+        sma_50 = float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else np.nan
+        sma_200 = float(close.rolling(200).mean().iloc[-1]) if len(close) >= 200 else np.nan
+
         metrics = {
             **returns,
             "rs_score": rs_score,
@@ -924,6 +932,8 @@ class MarketDataEnricher:
             "pivot_price": pivot_price,
             "breakout_pct": breakout_pct,
             "near_pivot": bool(-0.05 <= breakout_pct <= 0.05) if pd.notna(breakout_pct) else False,
+            "sma_50": sma_50,
+            "sma_200": sma_200,
         }
 
         if benchmark_close is not None and len(benchmark_close.dropna()) >= 60:
@@ -1051,6 +1061,12 @@ class MarketDataEnricher:
         })
         if values.empty:
             return
+        if target_field == "rs_rating" and len(values) < 200:
+            logger.warning(
+                f"[enrich] Warning: RS rating is being ranked against a small subset of {len(values)} tickers "
+                "instead of the entire market. Consider running the enrichment process without company_limit "
+                "for accurate relative strength percentile ranks."
+            )
         ranks = values.rank(pct=True) * scale
         for ticker, rank in ranks.items():
             results[ticker][target_field] = float(rank)

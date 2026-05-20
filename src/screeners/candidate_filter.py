@@ -1,4 +1,4 @@
-"""Candidate filtering helpers for CAN SLIM/SEPA screening."""
+"""Candidate filtering helpers for CAN SLIM screening."""
 
 from __future__ import annotations
 
@@ -239,12 +239,19 @@ def _evaluate_screening_candidate(
             company.setdefault("profit_margin", 0.04)
             company.setdefault("roe", 0.08)
             company.setdefault("debt_to_equity", 1.2)
+            company.setdefault("annual_eps_consecutive_growth", True)
 
     debt_to_equity = company.get("debt_to_equity", float('inf'))
     debt_ok = True if debt_to_equity <= 0 else _passes_max_threshold(
         debt_to_equity,
         criteria.get("debt_to_equity", float('inf')),
     )
+
+
+
+    eps_consecutive_growth_ok = True
+    if criteria.get("require_annual_consecutive_growth", False):
+        eps_consecutive_growth_ok = bool(company.get("annual_eps_consecutive_growth", False))
 
     base_depth = company.get("base_depth_65d")
     base_signal = (
@@ -256,6 +263,7 @@ def _evaluate_screening_candidate(
     results = {
         "eps": _passes_min_threshold(company.get("quarterly_eps_growth"), criteria.get("quarterly_eps_growth", 0)),
         "eps_cagr": _passes_min_threshold(company.get("annual_eps_cagr"), criteria.get("annual_eps_cagr", 0)),
+        "eps_consecutive_growth": eps_consecutive_growth_ok,
         "revenue": _passes_min_threshold(company.get("revenue_growth"), criteria.get("revenue_growth", 0)),
         "margin": _passes_min_threshold(company.get("profit_margin"), criteria.get("profit_margin", 0)),
         "roe": _passes_min_threshold(company.get("roe"), criteria.get("roe", 0)),
@@ -308,7 +316,7 @@ def _filter_screening_candidates(
 ) -> tuple[list[Dict[str, Any]], Dict[str, int]]:
     """Filter companies and collect per-criterion pass counts."""
     criteria_counts = {criterion: 0 for criterion in [
-        "eps", "eps_cagr", "revenue", "margin", "roe", "debt", "mktcap",
+        "eps", "eps_cagr", "eps_consecutive_growth", "revenue", "margin", "roe", "debt", "mktcap",
         "sp500", "rs", "near_high", "liquidity", "rs_line", "industry",
         "market_direction", "supply_demand", "institutional", "new_high", "base", "breakout"
     ]}

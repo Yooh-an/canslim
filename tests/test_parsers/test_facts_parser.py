@@ -329,5 +329,41 @@ class TestXBRLFactsParser(unittest.TestCase):
         self.assertAlmostEqual(metrics["debt_to_equity"], 0.5)
 
 
+    def test_annual_eps_consecutive_growth(self):
+        """Test consecutive annual EPS growth calculation."""
+        # 1. Rising consecutive EPS (True case)
+        us_gaap_facts_true = {
+            "EarningsPerShareDiluted": {
+                "units": {
+                    "USD/shares": [
+                        {"form": "10-K", "fy": 2025, "fp": "FY", "start": "2025-01-01", "end": "2025-12-31", "filed": "2026-02-15", "val": 4.50},
+                        {"form": "10-K", "fy": 2024, "fp": "FY", "start": "2024-01-01", "end": "2024-12-31", "filed": "2025-02-15", "val": 3.20},
+                        {"form": "10-K", "fy": 2023, "fp": "FY", "start": "2023-01-01", "end": "2023-12-31", "filed": "2024-02-15", "val": 2.10},
+                        {"form": "10-K", "fy": 2022, "fp": "FY", "start": "2022-01-01", "end": "2022-12-31", "filed": "2023-02-15", "val": 1.50},
+                    ]
+                }
+            }
+        }
+        metrics_true = {}
+        self.parser._extract_eps_metrics(us_gaap_facts_true, metrics_true)
+        self.assertTrue(metrics_true.get("annual_eps_consecutive_growth"))
+
+        # 2. Non-consecutive / declining EPS (False case)
+        us_gaap_facts_false = {
+            "EarningsPerShareDiluted": {
+                "units": {
+                    "USD/shares": [
+                        {"form": "10-K", "fy": 2025, "fp": "FY", "start": "2025-01-01", "end": "2025-12-31", "filed": "2026-02-15", "val": 4.50},
+                        {"form": "10-K", "fy": 2024, "fp": "FY", "start": "2024-01-01", "end": "2024-12-31", "filed": "2025-02-15", "val": 3.20},
+                        {"form": "10-K", "fy": 2023, "fp": "FY", "start": "2023-01-01", "end": "2023-12-31", "filed": "2024-02-15", "val": 3.50},
+                    ]
+                }
+            }
+        }
+        metrics_false = {}
+        self.parser._extract_eps_metrics(us_gaap_facts_false, metrics_false)
+        self.assertFalse(metrics_false.get("annual_eps_consecutive_growth"))
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -242,6 +242,7 @@ def print_criteria_breakdown(
     friendly: Dict[str, str] = {
         "eps": "📈 분기 EPS",
         "eps_cagr": "📈 연간 EPS CAGR",
+        "eps_consecutive_growth": "📈 연간 EPS 연속 성장",
         "revenue": "💰 매출 성장",
         "margin": "💹 영업이익률",
         "roe": "🎯 ROE",
