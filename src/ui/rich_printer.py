@@ -77,18 +77,46 @@ def print_screening_criteria(
     def _add(label: str, value: str, color: str = "bright_yellow") -> None:
         table.add_row(label, f"[{color}]{value}[/{color}]")
 
-    _add("분기 EPS 성장률", f"≥ {criteria.get('quarterly_eps_growth', 0.20) * 100:.1f}%")
-    _add("연간 EPS CAGR", f"≥ {criteria.get('annual_eps_cagr', 0.20) * 100:.1f}%")
-    _add("매출 성장률", f"≥ {criteria.get('revenue_growth', 0.15) * 100:.1f}%")
-    _add("영업이익률", f"≥ {criteria.get('profit_margin', 0.10) * 100:.1f}%")
-    _add("ROE", f"≥ {criteria.get('roe', 0.15) * 100:.1f}%")
-    _add("부채비율 (D/E)", f"≤ {criteria.get('debt_to_equity', 1.0)}")
-    _add("최소 시가총액", f"${criteria.get('min_market_cap', 200000000) / 1_000_000:.1f}M")
+    def _format_pct(val: Optional[float], default: float) -> str:
+        v = val if val is not None else default
+        if v is None or v < -5.0:
+            return "제한 없음"
+        return f"≥ {v * 100:.1f}%"
+
+    def _format_de(val: Optional[float]) -> str:
+        if val is None or val >= 900:
+            return "제한 없음"
+        return f"≤ {val}"
+
+    def _format_mktcap(val: Optional[float]) -> str:
+        if val is None or val <= 0:
+            return "제한 없음"
+        return f"${val / 1_000_000:.1f}M"
+
+    def _format_rs(val: Optional[float]) -> str:
+        if val is None or val <= 0:
+            return "제한 없음"
+        return f"≥ {val:.0f}"
+
+    def _format_volume(val: Optional[float]) -> str:
+        if val is None or val <= 0:
+            return "제한 없음"
+        return f"≥ ${val / 1_000_000:.1f}M"
+
+    _add("분기 EPS 성장률", _format_pct(criteria.get('quarterly_eps_growth'), 0.20))
+    _add("연간 EPS CAGR", _format_pct(criteria.get('annual_eps_cagr'), 0.20))
+    _add("매출 성장률", _format_pct(criteria.get('revenue_growth'), 0.15))
+    _add("영업이익률", _format_pct(criteria.get('profit_margin'), 0.10))
+    _add("ROE", _format_pct(criteria.get('roe'), 0.15))
+    _add("부채비율 (D/E)", _format_de(criteria.get('debt_to_equity')))
+    _add("최소 시가총액", _format_mktcap(criteria.get('min_market_cap')))
     if criteria.get("outperform_sp500", True):
         _add("S&P 500 아웃퍼폼", "필수", "bright_green")
-    _add("RS Rating", f"≥ {leadership.get('rs_rating_min', 80):.0f}")
-    _add("52주 고가 대비", f"≥ {leadership.get('price_vs_52w_high_min', 0.85) * 100:.1f}%")
-    _add("50일 평균 거래대금", f"≥ ${leadership.get('avg_dollar_volume_min', 0) / 1_000_000:.1f}M")
+    else:
+        _add("S&P 500 아웃퍼폼", "제한 없음", "dim white")
+    _add("RS Rating", _format_rs(leadership.get('rs_rating_min')))
+    _add("52주 고가 대비", _format_pct(leadership.get('price_vs_52w_high_min'), 0.85))
+    _add("50일 평균 거래대금", _format_volume(leadership.get('avg_dollar_volume_min')))
 
     if market_direction_criteria.get("required", False):
         status = market_direction.get("market_direction_status", "missing")
