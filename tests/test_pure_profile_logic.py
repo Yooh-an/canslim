@@ -40,6 +40,21 @@ class TestPureProfileLogic(unittest.TestCase):
         }
         self.assertTrue(_check_supply_demand(company, criteria))
 
+    def test_supply_demand_can_disable_volume_trend_threshold(self):
+        criteria = {
+            "require_supply_demand": True,
+            "up_down_volume_ratio_min": 1.0,
+            "volume_trend_50_200_min": None,
+            "require_breakout_volume_confirmation": False,
+        }
+        company = {
+            "up_down_volume_ratio_50d": 1.2,
+            "volume_trend_50_200": 0.1,
+        }
+
+        self.assertTrue(_check_supply_demand(company, criteria))
+        self.assertFalse(_check_supply_demand({**company, "up_down_volume_ratio_50d": 0.8}, criteria))
+
     def test_institutional_support_accepts_ownership_or_holder_count(self):
         criteria = {
             "require_institutional_sponsorship": True,

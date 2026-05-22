@@ -18,6 +18,7 @@ from pathlib import Path
 from src.api.sec_client import SECClient
 from src.collectors.insider_collector import enrich_companies_with_insider_data
 from src.collectors.institutional_collector import enrich_companies_with_13f_data
+from src.enrichers.pipeline import CompositeCompanyEnricher, FunctionCompanyEnricher
 from src.screeners.market_direction import analyze_market_direction
 from src.utils.security_classifier import apply_security_classification
 from src.utils.yahoo_finance import configure_yfinance_user_agent
@@ -29,6 +30,45 @@ except ImportError:
     yf = None
 
 logger = logging.getLogger(__name__)
+
+
+def _print_progress(message: str) -> None:
+    print(message, flush=True)
+
+
+def _build_optional_enrichment_pipeline(config, sec_client=None) -> CompositeCompanyEnricher:
+    """Build optional post-market enrichment steps from config."""
+    enrichers = []
+    if config.get("institutional_data", {}).get("enabled", False):
+        enrichers.append(
+            FunctionCompanyEnricher(
+                name="sec_13f",
+                enrich_func=lambda companies: enrich_companies_with_13f_data(
+                    companies,
+                    config,
+                    sec_client=sec_client,
+                ),
+                before_message="[enrich] Starting SEC 13F institutional enrichment",
+                after_message="[enrich] Applied SEC 13F institutional enrichment",
+                progress=_print_progress,
+            )
+        )
+    if config.get("insider_data", {}).get("enabled", False):
+        enrichers.append(
+            FunctionCompanyEnricher(
+                name="sec_form4",
+                enrich_func=lambda companies: enrich_companies_with_insider_data(
+                    companies,
+                    config,
+                    sec_client=sec_client,
+                ),
+                before_message="[enrich] Starting SEC Form 4 insider enrichment",
+                after_message="[enrich] Applied SEC Form 4 insider enrichment",
+                progress=_print_progress,
+            )
+        )
+    return CompositeCompanyEnricher(enrichers)
+
 
 class MarketDataEnricher:
     """Enriches company data with market information from SEC data."""
@@ -1419,17 +1459,12 @@ def enrich_market_data(config, use_external_api: bool = False):
             rate_limit = config.get("sec_api", {}).get("rate_limit_delay", 0.1)
             sec_client = SECClient(user_agent=user_agent, rate_limit_delay=rate_limit)
 
-        # Add optional free SEC 13F institutional sponsorship trends.
-        if enriched_companies and config.get("institutional_data", {}).get("enabled", False):
-            print("[enrich] Starting SEC 13F institutional enrichment", flush=True)
-            enriched_companies = enrich_companies_with_13f_data(enriched_companies, config, sec_client=sec_client)
-            print("[enrich] Applied SEC 13F institutional enrichment", flush=True)
-
-        # Add optional SEC Form 4 insider activity as a supporting signal.
-        if enriched_companies and config.get("insider_data", {}).get("enabled", False):
-            print("[enrich] Starting SEC Form 4 insider enrichment", flush=True)
-            enriched_companies = enrich_companies_with_insider_data(enriched_companies, config, sec_client=sec_client)
-            print("[enrich] Applied SEC Form 4 insider enrichment", flush=True)
+        if enriched_companies:
+            enrichment_pipeline = _build_optional_enrichment_pipeline(
+                config,
+                sec_client=sec_client,
+            )
+            enriched_companies = enrichment_pipeline.enrich(enriched_companies)
 
         # Replace original file with enriched file
         if enriched_companies:

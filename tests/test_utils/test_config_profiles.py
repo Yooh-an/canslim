@@ -12,6 +12,7 @@ def test_canslim_watchlist_profile_is_broader_than_pure_profile():
     assert watchlist["institutional_criteria"]["require_institutional_sponsorship"] is False
     assert watchlist["leadership_criteria"]["rs_rating_min"] < pure["leadership_criteria"]["rs_rating_min"]
     assert watchlist["screening_criteria"]["quarterly_eps_growth"] < pure["screening_criteria"]["quarterly_eps_growth"]
+    assert watchlist["supply_demand_criteria"]["volume_trend_50_200_min"] is None
 
 
 def test_special_universe_profiles_load_with_security_filters():

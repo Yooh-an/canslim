@@ -15,7 +15,7 @@ from src.collectors.insider_collector import enrich_companies_with_insider_data
 from src.enrichers.fundamental_fallback import enrich_company_fundamentals
 from src.enrichers.market_data_enricher import MarketDataEnricher
 from src.parsers.facts_parser import XBRLFactsParser
-from src.screeners.candidate_filter import _evaluate_screening_candidate
+from src.screeners.candidate_filter import evaluate_screening_candidate
 from src.screeners.canslim_scoring import calculate_canslim_score
 from src.screeners.trade_rules import add_trade_rules
 
@@ -236,7 +236,7 @@ def analyze_ticker(ticker: str, config: Mapping[str, Any]) -> Dict[str, Any]:
     market_ok, market_direction = _market_direction_ok(config)
     test_mode = config.get("download_settings", {}).get("test_mode", False)
 
-    passed, criterion_results = _evaluate_screening_candidate(
+    passed, criterion_results = evaluate_screening_candidate(
         dict(company),
         criteria,
         leadership_criteria,

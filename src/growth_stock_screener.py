@@ -38,6 +38,7 @@ from src.screeners.candidate_filter import (
     _check_institutional,
     _check_pattern,
     _check_supply_demand,
+    filter_screening_candidates,
     _filter_screening_candidates,
     _sort_screen_results,
 )
@@ -295,6 +296,60 @@ def _has_metric_value(company: Dict[str, Any], metric: str) -> bool:
     return True
 
 
+def _coerce_optional_float(value: Any) -> float | None:
+    """Return a float for real numeric values, otherwise None."""
+    try:
+        if value is None or not pd.notna(value):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _calculate_profile_valid_breakout(company: Dict[str, Any], pattern_criteria: Dict[str, Any]) -> bool | None:
+    """Calculate valid_breakout using the active profile's breakout criteria.
+
+    The cached market-data file stores raw breakout metrics plus a derived
+    boolean. The boolean is profile-dependent because the minimum volume ratio
+    differs by profile, so screening must refresh it from the raw metrics.
+    """
+    breakout_pct = _coerce_optional_float(company.get("breakout_pct"))
+    if breakout_pct is None:
+        return None
+    if not 0 <= breakout_pct <= 0.05:
+        return False
+
+    volume_threshold = pattern_criteria.get("breakout_volume_ratio_min", 1.4)
+    if volume_threshold is None:
+        return True
+
+    breakout_volume_ratio = _coerce_optional_float(company.get("breakout_volume_ratio"))
+    if breakout_volume_ratio is None:
+        return None
+
+    threshold = _coerce_optional_float(volume_threshold)
+    if threshold is None:
+        threshold = 1.4
+    return breakout_volume_ratio >= threshold
+
+
+def _refresh_profile_breakout_signals(
+    companies: list[Dict[str, Any]],
+    pattern_criteria: Dict[str, Any],
+) -> list[Dict[str, Any]]:
+    """Refresh profile-dependent breakout booleans from raw breakout metrics."""
+    refreshed = []
+    for company in companies:
+        updated = dict(company)
+        valid_breakout = _calculate_profile_valid_breakout(updated, pattern_criteria)
+        if valid_breakout is None:
+            updated.pop("valid_breakout", None)
+        else:
+            updated["valid_breakout"] = valid_breakout
+        refreshed.append(updated)
+    return refreshed
+
+
 def _calculate_metric_coverage(companies: list[Dict[str, Any]]) -> tuple[Dict[str, int], Dict[str, int]]:
     """Return metric availability counts plus bullish signal true counts."""
     coverage_counts = {metric: 0 for metric in METRICS_FOR_COVERAGE}
@@ -429,6 +484,10 @@ def screen_stocks(config):
         with open(companies_list_file, 'r') as f:
             companies = json.load(f)
         companies = _hydrate_cached_enrichment(companies, config)
+        companies = _refresh_profile_breakout_signals(
+            companies,
+            config.get("pattern_criteria", {}),
+        )
         try:
             with open(companies_list_file, 'w') as f:
                 json.dump(companies, f, indent=2)
@@ -521,7 +580,7 @@ def screen_stocks(config):
             return
         
         # 기준에 맞는 회사 필터링
-        filtered_companies, criteria_counts = _filter_screening_candidates(
+        filtered_companies, criteria_counts = filter_screening_candidates(
             companies,
             criteria,
             leadership_criteria,

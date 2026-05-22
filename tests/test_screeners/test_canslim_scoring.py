@@ -138,6 +138,21 @@ def test_calculate_canslim_score_records_fail_reasons_for_weak_candidate():
     assert "M: market direction not supportive" in scored["fail_reasons"]
 
 
+def test_supply_demand_score_ignores_disabled_volume_trend_threshold():
+    scored = calculate_canslim_score(
+        dict(PASSING_COMPANY, volume_trend_50_200=0.1),
+        CRITERIA,
+        LEADERSHIP,
+        dict(SUPPLY, volume_trend_50_200_min=None),
+        INSTITUTIONAL,
+        PATTERN,
+        market_direction_ok=True,
+    )
+
+    assert scored["s_score"] == 100.0
+    assert "S: up/down volume below threshold" not in scored["fail_reasons"]
+
+
 def test_sort_screen_results_prefers_canslim_score_when_available():
     rows = [
         {"ticker": "LOW", "canslim_score": 70, "quarterly_eps_growth": 1.0, "annual_eps_cagr": 1.0, "revenue_growth": 1.0},

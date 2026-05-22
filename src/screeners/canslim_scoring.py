@@ -90,18 +90,33 @@ def _score_new(company: Mapping[str, Any], pattern_criteria: Mapping[str, Any]) 
 def _score_supply_demand(company: Mapping[str, Any], criteria: Mapping[str, Any]) -> tuple[float, list[str], list[str]]:
     pass_reasons: list[str] = []
     fail_reasons: list[str] = []
-    up_down = _num(company.get("up_down_volume_ratio_50d"))
-    up_down_min = _num(criteria.get("up_down_volume_ratio_min", 1.0), 1.0)
-    volume_trend = _num(company.get("volume_trend_50_200"))
-    volume_min = _num(criteria.get("volume_trend_50_200_min", 0.9), 0.9)
+    score_parts: list[tuple[float, float]] = []
+
+    up_down_min_raw = criteria.get("up_down_volume_ratio_min", 1.0)
+    if up_down_min_raw is not None:
+        up_down = _num(company.get("up_down_volume_ratio_50d"))
+        up_down_min = _num(up_down_min_raw, 1.0)
+        score_parts.append((0.45, _ratio_score(up_down, up_down_min, cap=1.4)))
+        if up_down >= up_down_min:
+            pass_reasons.append("S: accumulation volume")
+        else:
+            fail_reasons.append("S: up/down volume below threshold")
+
+    volume_min_raw = criteria.get("volume_trend_50_200_min", 0.9)
+    if volume_min_raw is not None:
+        volume_trend = _num(company.get("volume_trend_50_200"))
+        volume_min = _num(volume_min_raw, 0.9)
+        score_parts.append((0.35, _ratio_score(volume_trend, volume_min, cap=1.4)))
+
     breakout_volume = _num(company.get("breakout_volume_ratio"))
     breakout_min = _num(criteria.get("breakout_volume_ratio_min", 1.3), 1.3)
-    score = 0.45 * _ratio_score(up_down, up_down_min, cap=1.4) + 0.35 * _ratio_score(volume_trend, volume_min, cap=1.4)
-    score += 20.0 if breakout_volume <= 0 else 0.20 * _ratio_score(breakout_volume, breakout_min, cap=1.5)
-    if up_down >= up_down_min:
-        pass_reasons.append("S: accumulation volume")
-    else:
-        fail_reasons.append("S: up/down volume below threshold")
+    score_parts.append((
+        0.20,
+        100.0 if breakout_volume <= 0 else _ratio_score(breakout_volume, breakout_min, cap=1.5),
+    ))
+
+    total_weight = sum(weight for weight, _ in score_parts)
+    score = sum(weight * part_score for weight, part_score in score_parts) / total_weight if total_weight else 100.0
     return min(100.0, score), pass_reasons, fail_reasons
 
 

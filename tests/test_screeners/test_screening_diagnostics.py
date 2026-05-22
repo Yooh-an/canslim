@@ -3,6 +3,7 @@
 from src.growth_stock_screener import (
     _calculate_metric_coverage,
     _collect_data_quality_warnings,
+    _refresh_profile_breakout_signals,
     _score_companies_for_diagnostics,
 )
 
@@ -37,6 +38,36 @@ def test_metric_coverage_counts_zero_and_false_values_as_available():
     assert coverage["insider_buy_count_90d"] == 2
     assert signal_counts["new_52w_high"] == 1
     assert signal_counts["valid_breakout"] == 0
+
+
+def test_refresh_profile_breakout_signals_uses_active_profile_threshold():
+    companies = [
+        {
+            "ticker": "WATCH",
+            "breakout_pct": 0.03,
+            "breakout_volume_ratio": 1.25,
+            "valid_breakout": False,
+        },
+        {
+            "ticker": "WEAKVOL",
+            "breakout_pct": 0.03,
+            "breakout_volume_ratio": 1.10,
+            "valid_breakout": True,
+        },
+        {
+            "ticker": "NODATA",
+            "valid_breakout": True,
+        },
+    ]
+
+    refreshed = _refresh_profile_breakout_signals(
+        companies,
+        {"breakout_volume_ratio_min": 1.20},
+    )
+
+    assert refreshed[0]["valid_breakout"] is True
+    assert refreshed[1]["valid_breakout"] is False
+    assert "valid_breakout" not in refreshed[2]
 
 
 def test_score_companies_for_diagnostics_populates_canslim_score_before_filtering():

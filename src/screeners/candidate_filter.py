@@ -2,12 +2,37 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
 
 import pandas as pd
 
 from src.screeners.canslim_scoring import calculate_canslim_score
+from src.screeners.rules import CallableRule, ScreeningEngine
 from src.screeners.trade_rules import add_trade_rules
+
+
+CRITERIA_COUNT_KEYS = [
+    "eps",
+    "eps_cagr",
+    "eps_consecutive_growth",
+    "revenue",
+    "margin",
+    "roe",
+    "debt",
+    "mktcap",
+    "sp500",
+    "rs",
+    "near_high",
+    "liquidity",
+    "rs_line",
+    "industry",
+    "market_direction",
+    "supply_demand",
+    "institutional",
+    "new_high",
+    "base",
+    "breakout",
+]
 
 def _passes_min_threshold(value: Any, threshold: Any) -> bool:
     """Return True when a numeric value passes a minimum threshold or the threshold is disabled."""
@@ -184,6 +209,191 @@ def _check_pattern(company: Dict[str, Any], criteria: Dict[str, Any]) -> bool:
     return new_high_ok and base_ok and breakout_ok
 
 
+class ScreeningRuleFactory:
+    """Build CAN SLIM screening rule strategies from profile configuration."""
+
+    def __init__(
+        self,
+        criteria: Mapping[str, Any],
+        leadership_criteria: Mapping[str, Any],
+        supply_demand_criteria: Mapping[str, Any],
+        institutional_criteria: Mapping[str, Any],
+        pattern_criteria: Mapping[str, Any],
+        *,
+        market_direction_ok: bool,
+    ):
+        self.criteria = dict(criteria)
+        self.leadership_criteria = dict(leadership_criteria)
+        self.supply_demand_criteria = dict(supply_demand_criteria)
+        self.institutional_criteria = dict(institutional_criteria)
+        self.pattern_criteria = dict(pattern_criteria)
+        self.market_direction_ok = market_direction_ok
+
+    def build(self) -> list[CallableRule]:
+        """Return ordered rule strategies used for diagnostics and pass/fail."""
+        return [
+            CallableRule(
+                "eps",
+                lambda company: _passes_min_threshold(
+                    company.get("quarterly_eps_growth"),
+                    self.criteria.get("quarterly_eps_growth", 0),
+                ),
+            ),
+            CallableRule(
+                "eps_cagr",
+                lambda company: _passes_min_threshold(
+                    company.get("annual_eps_cagr"),
+                    self.criteria.get("annual_eps_cagr", 0),
+                ),
+            ),
+            CallableRule(
+                "eps_consecutive_growth",
+                self._passes_eps_consecutive_growth,
+            ),
+            CallableRule(
+                "revenue",
+                lambda company: _passes_min_threshold(
+                    company.get("revenue_growth"),
+                    self.criteria.get("revenue_growth", 0),
+                ),
+            ),
+            CallableRule(
+                "margin",
+                lambda company: _passes_min_threshold(
+                    company.get("profit_margin"),
+                    self.criteria.get("profit_margin", 0),
+                ),
+            ),
+            CallableRule(
+                "roe",
+                lambda company: _passes_min_threshold(
+                    company.get("roe"),
+                    self.criteria.get("roe", 0),
+                ),
+            ),
+            CallableRule("debt", self._passes_debt),
+            CallableRule("mktcap", self._passes_market_cap_or_liquidity),
+            CallableRule("sp500", self._passes_sp500_outperformance),
+            CallableRule(
+                "rs",
+                lambda company: _passes_min_threshold(
+                    company.get("rs_rating"),
+                    self.leadership_criteria.get("rs_rating_min", 80),
+                ),
+            ),
+            CallableRule(
+                "near_high",
+                lambda company: _passes_min_threshold(
+                    company.get("price_vs_52w_high"),
+                    self.leadership_criteria.get("price_vs_52w_high_min", 0.85),
+                ),
+            ),
+            CallableRule(
+                "liquidity",
+                lambda company: _passes_min_threshold(
+                    company.get("avg_dollar_volume_50d"),
+                    self.leadership_criteria.get("avg_dollar_volume_min", 0),
+                ),
+            ),
+            CallableRule("rs_line", self._passes_rs_line),
+            CallableRule("industry", self._passes_industry_leadership),
+            CallableRule("market_direction", lambda company: self.market_direction_ok),
+            CallableRule(
+                "supply_demand",
+                lambda company: _check_supply_demand(
+                    dict(company),
+                    self.supply_demand_criteria,
+                ),
+            ),
+            CallableRule(
+                "institutional",
+                lambda company: _check_institutional(
+                    dict(company),
+                    self.institutional_criteria,
+                ),
+            ),
+            CallableRule(
+                "new_high",
+                lambda company: _check_pattern(dict(company), self.pattern_criteria),
+            ),
+            CallableRule("base", self._has_base_signal, required=False),
+            CallableRule(
+                "breakout",
+                lambda company: bool(company.get("valid_breakout", False)),
+                required=False,
+            ),
+        ]
+
+    def _passes_eps_consecutive_growth(self, company: Mapping[str, Any]) -> bool:
+        if not self.criteria.get("require_annual_consecutive_growth", False):
+            return True
+        return bool(company.get("annual_eps_consecutive_growth", False))
+
+    def _passes_debt(self, company: Mapping[str, Any]) -> bool:
+        debt_to_equity = company.get("debt_to_equity", float("inf"))
+        if debt_to_equity <= 0:
+            return True
+        return _passes_max_threshold(
+            debt_to_equity,
+            self.criteria.get("debt_to_equity", float("inf")),
+        )
+
+    def _passes_market_cap_or_liquidity(self, company: Mapping[str, Any]) -> bool:
+        return _check_market_cap_or_liquidity(
+            dict(company),
+            self.criteria,
+            self.leadership_criteria,
+        )
+
+    def _passes_sp500_outperformance(self, company: Mapping[str, Any]) -> bool:
+        if not self.criteria.get("outperform_sp500", False):
+            return True
+        return company.get("market_outperformance_12m", float("-inf")) > 0
+
+    def _passes_rs_line(self, company: Mapping[str, Any]) -> bool:
+        if not self.leadership_criteria.get("rs_line_near_high", False):
+            return True
+        return bool(company.get("rs_line_near_high", False))
+
+    def _passes_industry_leadership(self, company: Mapping[str, Any]) -> bool:
+        if not self.leadership_criteria.get("require_industry_leadership", False):
+            return True
+        return (
+            company.get("industry_rs_rank", 0)
+            >= self.leadership_criteria.get("industry_rs_rank_min", 80)
+            and company.get("industry_stock_rank", 0)
+            >= self.leadership_criteria.get("industry_stock_rank_min", 80)
+        )
+
+    def _has_base_signal(self, company: Mapping[str, Any]) -> bool:
+        base_depth = company.get("base_depth_65d")
+        return (
+            pd.notna(base_depth)
+            and base_depth <= self.pattern_criteria.get("base_depth_max", 0.35)
+        )
+
+
+def build_screening_engine(
+    criteria: Dict[str, Any],
+    leadership_criteria: Dict[str, Any],
+    supply_demand_criteria: Dict[str, Any],
+    institutional_criteria: Dict[str, Any],
+    pattern_criteria: Dict[str, Any],
+    market_direction_ok: bool,
+) -> ScreeningEngine:
+    """Build the public screening engine for a configured profile."""
+    return ScreeningEngine(
+        ScreeningRuleFactory(
+            criteria,
+            leadership_criteria,
+            supply_demand_criteria,
+            institutional_criteria,
+            pattern_criteria,
+            market_direction_ok=market_direction_ok,
+        ).build()
+    )
+
+
 def _sort_screen_results(filtered_companies: list[Dict[str, Any]], profile_name: str) -> None:
     """Sort results in-place using a profile-aware ranking."""
     if profile_name == "canslim_hybrid":
@@ -215,7 +425,7 @@ def _sort_screen_results(filtered_companies: list[Dict[str, Any]], profile_name:
         reverse=True,
     )
 
-def _evaluate_screening_candidate(
+def evaluate_screening_candidate(
     company: Dict[str, Any],
     criteria: Dict[str, Any],
     leadership_criteria: Dict[str, Any],
@@ -241,70 +451,46 @@ def _evaluate_screening_candidate(
             company.setdefault("debt_to_equity", 1.2)
             company.setdefault("annual_eps_consecutive_growth", True)
 
-    debt_to_equity = company.get("debt_to_equity", float('inf'))
-    debt_ok = True if debt_to_equity <= 0 else _passes_max_threshold(
-        debt_to_equity,
-        criteria.get("debt_to_equity", float('inf')),
+    engine = build_screening_engine(
+        criteria,
+        leadership_criteria,
+        supply_demand_criteria,
+        institutional_criteria,
+        pattern_criteria,
+        market_direction_ok,
     )
-
-
-
-    eps_consecutive_growth_ok = True
-    if criteria.get("require_annual_consecutive_growth", False):
-        eps_consecutive_growth_ok = bool(company.get("annual_eps_consecutive_growth", False))
-
-    base_depth = company.get("base_depth_65d")
-    base_signal = (
-        pd.notna(base_depth)
-        and base_depth <= pattern_criteria.get("base_depth_max", 0.35)
-    )
-    breakout_signal = bool(company.get("valid_breakout", False))
-
-    results = {
-        "eps": _passes_min_threshold(company.get("quarterly_eps_growth"), criteria.get("quarterly_eps_growth", 0)),
-        "eps_cagr": _passes_min_threshold(company.get("annual_eps_cagr"), criteria.get("annual_eps_cagr", 0)),
-        "eps_consecutive_growth": eps_consecutive_growth_ok,
-        "revenue": _passes_min_threshold(company.get("revenue_growth"), criteria.get("revenue_growth", 0)),
-        "margin": _passes_min_threshold(company.get("profit_margin"), criteria.get("profit_margin", 0)),
-        "roe": _passes_min_threshold(company.get("roe"), criteria.get("roe", 0)),
-        "debt": debt_ok,
-        "mktcap": _check_market_cap_or_liquidity(company, criteria, leadership_criteria),
-        "sp500": True,
-        "rs": _passes_min_threshold(company.get("rs_rating"), leadership_criteria.get("rs_rating_min", 80)),
-        "near_high": _passes_min_threshold(company.get("price_vs_52w_high"), leadership_criteria.get("price_vs_52w_high_min", 0.85)),
-        "liquidity": _passes_min_threshold(company.get("avg_dollar_volume_50d"), leadership_criteria.get("avg_dollar_volume_min", 0)),
-        "rs_line": True,
-        "industry": True,
-        "market_direction": market_direction_ok,
-        "supply_demand": _check_supply_demand(company, supply_demand_criteria),
-        "institutional": _check_institutional(company, institutional_criteria),
-        "new_high": _check_pattern(company, pattern_criteria),
-        "base": base_signal,
-        "breakout": breakout_signal,
-    }
-
-    if criteria.get("outperform_sp500", False):
-        results["sp500"] = company.get("market_outperformance_12m", float("-inf")) > 0
-    if leadership_criteria.get("rs_line_near_high", False):
-        results["rs_line"] = bool(company.get("rs_line_near_high", False))
-    if leadership_criteria.get("require_industry_leadership", False):
-        results["industry"] = (
-            company.get("industry_rs_rank", 0) >= leadership_criteria.get("industry_rs_rank_min", 80)
-            and company.get("industry_stock_rank", 0) >= leadership_criteria.get("industry_stock_rank_min", 80)
-        )
-    pass_results = {
-        key: value
-        for key, value in results.items()
-        if key not in {"base", "breakout"}
-    }
+    evaluation = engine.evaluate(company)
 
     if test_mode:
-        return results["mktcap"], results
+        return evaluation.results["mktcap"], evaluation.results
 
-    return all(pass_results.values()), results
+    return evaluation.passed, evaluation.results
 
 
-def _filter_screening_candidates(
+def _evaluate_screening_candidate(
+    company: Dict[str, Any],
+    criteria: Dict[str, Any],
+    leadership_criteria: Dict[str, Any],
+    supply_demand_criteria: Dict[str, Any],
+    institutional_criteria: Dict[str, Any],
+    pattern_criteria: Dict[str, Any],
+    market_direction_ok: bool,
+    test_mode: bool,
+) -> tuple[bool, Dict[str, bool]]:
+    """Backward-compatible wrapper for existing tests and callers."""
+    return evaluate_screening_candidate(
+        company,
+        criteria,
+        leadership_criteria,
+        supply_demand_criteria,
+        institutional_criteria,
+        pattern_criteria,
+        market_direction_ok,
+        test_mode,
+    )
+
+
+def filter_screening_candidates(
     companies: list[Dict[str, Any]],
     criteria: Dict[str, Any],
     leadership_criteria: Dict[str, Any],
@@ -315,15 +501,11 @@ def _filter_screening_candidates(
     test_mode: bool,
 ) -> tuple[list[Dict[str, Any]], Dict[str, int]]:
     """Filter companies and collect per-criterion pass counts."""
-    criteria_counts = {criterion: 0 for criterion in [
-        "eps", "eps_cagr", "eps_consecutive_growth", "revenue", "margin", "roe", "debt", "mktcap",
-        "sp500", "rs", "near_high", "liquidity", "rs_line", "industry",
-        "market_direction", "supply_demand", "institutional", "new_high", "base", "breakout"
-    ]}
+    criteria_counts = {criterion: 0 for criterion in CRITERIA_COUNT_KEYS}
     filtered_companies = []
 
     for company in companies:
-        passed, criterion_results = _evaluate_screening_candidate(
+        passed, criterion_results = evaluate_screening_candidate(
             company,
             criteria,
             leadership_criteria,
@@ -351,3 +533,26 @@ def _filter_screening_candidates(
             filtered_companies.append(add_trade_rules(scored_company))
 
     return filtered_companies, criteria_counts
+
+
+def _filter_screening_candidates(
+    companies: list[Dict[str, Any]],
+    criteria: Dict[str, Any],
+    leadership_criteria: Dict[str, Any],
+    supply_demand_criteria: Dict[str, Any],
+    institutional_criteria: Dict[str, Any],
+    pattern_criteria: Dict[str, Any],
+    market_direction_ok: bool,
+    test_mode: bool,
+) -> tuple[list[Dict[str, Any]], Dict[str, int]]:
+    """Backward-compatible wrapper for existing tests and callers."""
+    return filter_screening_candidates(
+        companies,
+        criteria,
+        leadership_criteria,
+        supply_demand_criteria,
+        institutional_criteria,
+        pattern_criteria,
+        market_direction_ok,
+        test_mode,
+    )

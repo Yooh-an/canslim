@@ -33,7 +33,7 @@
   "supply_demand_criteria": {
     "require_supply_demand": true,
     "up_down_volume_ratio_min": 0.9,
-    "volume_trend_50_200_min": 0.80,
+    "volume_trend_50_200_min": null,
     "require_breakout_volume_confirmation": false
   },
   "institutional_criteria": {

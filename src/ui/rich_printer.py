@@ -125,7 +125,9 @@ def print_screening_criteria(
 
     if supply_demand.get("require_supply_demand", False):
         _add("상승/하락 거래량 비율", f"≥ {supply_demand.get('up_down_volume_ratio_min', 1.1):.2f}")
-        _add("50/200 거래량 추세", f"≥ {supply_demand.get('volume_trend_50_200_min', 1.0):.2f}")
+        volume_trend_min = supply_demand.get("volume_trend_50_200_min", 1.0)
+        if volume_trend_min is not None:
+            _add("50/200 거래량 추세", f"≥ {volume_trend_min:.2f}")
         if supply_demand.get("require_volume_dry_up", False):
             _add("거래량 드라이업", f"≤ {supply_demand.get('volume_dry_up_ratio_max', 0.8):.2f}")
 
