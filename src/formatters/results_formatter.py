@@ -63,7 +63,10 @@ class ResultsFormatter:
             'buy_zone_low', 'buy_zone_high', 'stop_loss_price', 'profit_target_low', 'profit_target_high',
             'institutional_holders', 'institutional_value', 'institutional_accumulation_score',
             'new_holder_count', 'increased_holder_count', 'decreased_holder_count', 'exited_holder_count',
-            'insider_signal', 'insider_buy_count_90d', 'insider_sell_count_90d', 'net_insider_buy_value_90d',
+            'insider_ownership', 'insider_signal', 'insider_buy_count_90d', 'insider_sell_count_90d',
+            'net_insider_buy_value_90d',
+            'shares_float', 'short_interest', 'short_percent_float', 'short_percent_shares_outstanding',
+            'short_days_to_cover', 'short_interest_settlement_date',
             'pass_reasons', 'fail_reasons'
         ]
         
@@ -80,7 +83,8 @@ class ResultsFormatter:
             'quarterly_eps_growth', 'annual_eps_cagr', 'revenue_growth',
             'eps_qtr_growth', 'revenue_qtr_growth', 'eps_3yr_cagr',
             'profit_margin', 'roe', 'price_vs_52w_high', 'price_performance',
-            'market_outperformance', 'market_outperformance_12m', 'institutional_ownership'
+            'market_outperformance', 'market_outperformance_12m', 'institutional_ownership',
+            'insider_ownership', 'short_percent_float', 'short_percent_shares_outstanding'
         ]
         
         for col in percentage_columns:

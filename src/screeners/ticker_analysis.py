@@ -12,6 +12,7 @@ import pandas as pd
 from src.api.sec_client import SECClient
 from src.collectors.institutional_collector import enrich_companies_with_13f_data
 from src.collectors.insider_collector import enrich_companies_with_insider_data
+from src.collectors.short_interest_collector import enrich_companies_with_short_interest_data
 from src.enrichers.fundamental_fallback import enrich_company_fundamentals
 from src.enrichers.market_data_enricher import MarketDataEnricher
 from src.parsers.facts_parser import XBRLFactsParser
@@ -91,6 +92,24 @@ SEC_REFRESH_FIELDS = [
     "debt_to_equity",
     "liabilities_to_equity",
 ]
+
+
+def _has_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() not in {"", "n/a", "na", "none", "null", "nan"}
+    try:
+        return bool(pd.notna(value))
+    except Exception:
+        return True
+
+
+def _same_numeric(left: Any, right: Any, tolerance: float = 1e-9) -> bool:
+    try:
+        return abs(float(left) - float(right)) <= tolerance
+    except (TypeError, ValueError):
+        return False
 
 
 def _sec_facts_file_for_company(company: Mapping[str, Any], config: Mapping[str, Any]) -> Path | None:
@@ -192,6 +211,57 @@ def _enrich_single_ticker_insider(company: Dict[str, Any], config: Mapping[str, 
     return company
 
 
+def _needs_short_interest_enrichment(company: Mapping[str, Any], config: Mapping[str, Any]) -> bool:
+    if not config.get("short_interest_data", {}).get("enabled", False):
+        return False
+    fields = ["short_interest", "short_days_to_cover"]
+    return any(field not in company or not pd.notna(company.get(field)) for field in fields)
+
+
+def _enrich_single_ticker_short_interest(company: Dict[str, Any], config: Mapping[str, Any]) -> Dict[str, Any]:
+    if not _needs_short_interest_enrichment(company, config):
+        return company
+    try:
+        enriched = enrich_companies_with_short_interest_data([company], config)
+    except Exception:
+        return company
+    if enriched:
+        return dict(enriched[0])
+    return company
+
+
+def _annotate_legacy_institutional_sources(company: Dict[str, Any], config: Mapping[str, Any]) -> Dict[str, Any]:
+    """Backfill source fields for rows created before per-metric sources existed."""
+    output = dict(company)
+    if _has_value(output.get("institutional_ownership_source")):
+        return output
+    if not _has_value(output.get("institutional_ownership")):
+        return output
+
+    legacy_source = output.get("institutional_data_source")
+    if legacy_source == "yfinance_info":
+        output["institutional_ownership_source"] = "yfinance_info"
+        return output
+
+    ticker = str(output.get("ticker") or "").upper().replace(".", "-").replace("/", "-")
+    if not ticker:
+        return output
+    raw_dir = Path(config.get("data_paths", {}).get("raw_data_dir", "data/raw"))
+    cache_file = raw_dir / "financial_data" / "market_data" / f"{ticker}_market.json"
+    if not cache_file.exists():
+        return output
+    try:
+        with cache_file.open("r") as f:
+            cached = json.load(f)
+    except Exception:
+        return output
+    if _same_numeric(cached.get("institutional_ownership"), output.get("institutional_ownership")):
+        source = cached.get("institutional_ownership_source") or cached.get("institutional_data_source")
+        if _has_value(source):
+            output["institutional_ownership_source"] = source
+    return output
+
+
 def _market_direction_ok(config: Mapping[str, Any]) -> tuple[bool, Dict[str, Any]]:
     market_criteria = config.get("market_direction", {})
     if not market_criteria.get("required", False):
@@ -227,6 +297,8 @@ def analyze_ticker(ticker: str, config: Mapping[str, Any]) -> Dict[str, Any]:
         company = MarketDataEnricher(market_config).enrich_single_ticker_market_data(company)
     company = _enrich_single_ticker_institutional(company, config)
     company = _enrich_single_ticker_insider(company, config)
+    company = _enrich_single_ticker_short_interest(company, config)
+    company = _annotate_legacy_institutional_sources(company, config)
 
     criteria = config.get("screening_criteria", {})
     leadership_criteria = config.get("leadership_criteria", {})
@@ -316,6 +388,142 @@ def _fmt_ratio(value: Any) -> str:
     return "N/A" if formatted == "N/A" else f"{formatted}x"
 
 
+MISSING_TEXT = "미수집"
+DENOMINATOR_MISSING_TEXT = "분모 없음"
+NOT_REPORTED_TEXT = "미제공"
+
+
+def _fmt_optional_pct(value: Any, missing: str = MISSING_TEXT) -> str:
+    return _pct(value) if _has_value(value) else missing
+
+
+def _fmt_optional_num(value: Any, digits: int = 2, missing: str = MISSING_TEXT) -> str:
+    return _fmt_num(value, digits) if _has_value(value) else missing
+
+
+def _is_zero(value: Any) -> bool:
+    try:
+        return _has_value(value) and float(value) == 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _fmt_short_percent(result: Mapping[str, Any], field: str) -> str:
+    if _has_value(result.get(field)):
+        return _pct(result.get(field))
+    if _is_zero(result.get("short_interest")):
+        return "0.0%"
+    if _has_value(result.get("short_interest")):
+        return DENOMINATOR_MISSING_TEXT
+    return MISSING_TEXT
+
+
+def _fmt_short_days(result: Mapping[str, Any]) -> str:
+    if _has_value(result.get("short_days_to_cover")):
+        return _fmt_num(result.get("short_days_to_cover"), 2)
+    if _is_zero(result.get("short_interest")):
+        return "0"
+    if _has_value(result.get("short_interest")):
+        return NOT_REPORTED_TEXT
+    return MISSING_TEXT
+
+
+def _source_suffix(source: Any, *, rich_mode: bool = False) -> str:
+    if not _has_value(source):
+        return ""
+    text = str(source)
+    return f" [dim]({text})[/dim]" if rich_mode else f" ({text})"
+
+
+def _plain_optional_rows(result: Mapping[str, Any]) -> list[str]:
+    rows: list[str] = []
+
+    ownership_source = result.get("institutional_ownership_source")
+    rows.append(
+        f"- Institutional ownership: {_fmt_optional_pct(result.get('institutional_ownership'))}"
+        f"{_source_suffix(ownership_source)}"
+    )
+
+    trend_source = result.get("institutional_trend_source") or result.get("institutional_data_source")
+    holders_label = "13F tracked managers" if str(trend_source or "").startswith("sec_13f") else "Institutional holders"
+    holders_source = result.get("institutional_holders_source") or (
+        trend_source if str(trend_source or "").startswith("sec_13f") else None
+    )
+    rows.append(
+        f"- {holders_label}: {_fmt_optional_num(result.get('institutional_holders'), 0)}"
+        f"{_source_suffix(holders_source)}"
+    )
+    rows.append(f"- 13F accumulation score: {_fmt_optional_num(result.get('institutional_accumulation_score'), 1)}")
+
+    rows.append(
+        f"- Insider ownership: {_fmt_optional_pct(result.get('insider_ownership'))}"
+        f"{_source_suffix(result.get('insider_ownership_source'))}"
+    )
+    rows.append(f"- Insider signal: {result.get('insider_signal') if _has_value(result.get('insider_signal')) else MISSING_TEXT}")
+
+    rows.append(f"- Short interest: {_fmt_optional_num(result.get('short_interest'), 0)}")
+    rows.append(f"- Short % float: {_fmt_short_percent(result, 'short_percent_float')}")
+    rows.append(f"- Short % shares outstanding: {_fmt_short_percent(result, 'short_percent_shares_outstanding')}")
+    rows.append(f"- Days to cover: {_fmt_short_days(result)}")
+    rows.append(
+        f"- Short interest date: "
+        f"{result.get('short_interest_settlement_date') if _has_value(result.get('short_interest_settlement_date')) else MISSING_TEXT}"
+    )
+    rows.append(
+        f"- Short data source: "
+        f"{result.get('short_interest_source') if _has_value(result.get('short_interest_source')) else MISSING_TEXT}"
+    )
+
+    return rows
+
+
+def _rich_optional_rows(result: Mapping[str, Any]) -> list[str]:
+    rows: list[str] = []
+
+    ownership_source = result.get("institutional_ownership_source")
+    rows.append(
+        f"    [dim]•[/dim] 기관 보유율      {_fmt_optional_pct(result.get('institutional_ownership'))}"
+        f"{_source_suffix(ownership_source, rich_mode=True)}"
+    )
+
+    trend_source = result.get("institutional_trend_source") or result.get("institutional_data_source")
+    holders_label = "13F 추적기관 수" if str(trend_source or "").startswith("sec_13f") else "기관 보유자"
+    holders_source = result.get("institutional_holders_source") or (
+        trend_source if str(trend_source or "").startswith("sec_13f") else None
+    )
+    rows.append(
+        f"    [dim]•[/dim] {holders_label:<14} {_fmt_optional_num(result.get('institutional_holders'), 0)}"
+        f"{_source_suffix(holders_source, rich_mode=True)}"
+    )
+    rows.append(
+        f"    [dim]•[/dim] 13F 축적 점수    {_fmt_optional_num(result.get('institutional_accumulation_score'), 1)}"
+    )
+
+    rows.append(
+        f"    [dim]•[/dim] 내부자 보유율    {_fmt_optional_pct(result.get('insider_ownership'))}"
+        f"{_source_suffix(result.get('insider_ownership_source'), rich_mode=True)}"
+    )
+    rows.append(
+        f"    [dim]•[/dim] 내부자 신호      "
+        f"{result.get('insider_signal') if _has_value(result.get('insider_signal')) else MISSING_TEXT}"
+    )
+
+    rows.append(f"    [dim]•[/dim] 공매도 잔고      {_fmt_optional_num(result.get('short_interest'), 0)}")
+    rows.append(f"    [dim]•[/dim] 공매도/float     {_fmt_short_percent(result, 'short_percent_float')}")
+    rows.append(f"    [dim]•[/dim] 공매도/발행주식  {_fmt_short_percent(result, 'short_percent_shares_outstanding')}")
+    rows.append(f"    [dim]•[/dim] Days to cover    {_fmt_short_days(result)}")
+    rows.append(
+        f"    [dim]•[/dim] 공매도 기준일    "
+        f"{result.get('short_interest_settlement_date') if _has_value(result.get('short_interest_settlement_date')) else MISSING_TEXT}"
+    )
+    rows.append(
+        f"    [dim]•[/dim] 공매도 출처      "
+        f"{result.get('short_interest_source') if _has_value(result.get('short_interest_source')) else MISSING_TEXT}"
+    )
+
+    return rows
+
+
 def _score_color(score: Any, max_val: int = 20) -> str:
     """Return a rich color tag for a component score."""
     try:
@@ -395,14 +603,10 @@ def _format_plain(result: Mapping[str, Any]) -> str:
         f"- Buy zone: {result.get('buy_zone_low', 'N/A')} ~ {result.get('buy_zone_high', 'N/A')}",
         f"- Stop loss: {result.get('stop_loss_price', 'N/A')}",
         f"- Profit target: {result.get('profit_target_low', 'N/A')} ~ {result.get('profit_target_high', 'N/A')}",
-        "",
-        "Institutional / insider:",
-        f"- Institutional ownership: {_pct(result.get('institutional_ownership'))}",
-        f"- Institutional holders: {_fmt_num(result.get('institutional_holders'), 0)}",
-        f"- Institutional data source: {result.get('institutional_data_source', 'N/A')}",
-        f"- 13F accumulation score: {_fmt_num(result.get('institutional_accumulation_score'), 1)}",
-        f"- Insider signal: {result.get('insider_signal', 'N/A')}",
     ]
+    optional_rows = _plain_optional_rows(result)
+    if optional_rows:
+        lines.extend(["", "Institutional / insider / short interest:", *optional_rows])
     if result.get("setup_reasons"):
         lines.extend(["", "Setup reasons:", *[f"- {reason}" for reason in result["setup_reasons"]]])
     if result.get("pass_reasons"):
@@ -495,18 +699,11 @@ def _format_rich(result: Mapping[str, Any]) -> str:
     lines.append(f"    [dim]•[/dim] 목표 수익       [bright_yellow]{profit_low}[/bright_yellow] ~ [bright_yellow]{profit_high}[/bright_yellow]")
     lines.append("")
 
-    # ── Institutional / insider ────────────────────────────────────
-    lines.append("  [bold underline bright_cyan]기관/내부자[/bold underline bright_cyan]")
-    inst_ownership = _pct(result.get("institutional_ownership"))
-    inst_holders = _fmt_num(result.get("institutional_holders"), 0)
-    inst_source = result.get("institutional_data_source", "N/A")
-    accum = _fmt_num(result.get("institutional_accumulation_score"), 1)
-    insider = result.get("insider_signal", "N/A")
-    lines.append(f"    [dim]•[/dim] 기관 보유율      {inst_ownership}")
-    lines.append(f"    [dim]•[/dim] 기관 보유자      {inst_holders}")
-    lines.append(f"    [dim]•[/dim] 기관 데이터 출처  {inst_source}")
-    lines.append(f"    [dim]•[/dim] 13F 축적 점수    {accum}")
-    lines.append(f"    [dim]•[/dim] 내부자 신호      {insider}")
+    # ── Institutional / insider / short interest ───────────────────
+    optional_rows = _rich_optional_rows(result)
+    if optional_rows:
+        lines.append("  [bold underline bright_cyan]기관/내부자/공매도[/bold underline bright_cyan]")
+        lines.extend(optional_rows)
 
     # ── Pass / fail reasons ────────────────────────────────────────
     if result.get("pass_reasons"):

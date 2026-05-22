@@ -202,6 +202,90 @@ def test_analyze_ticker_applies_local_form4_insider_enrichment(tmp_path):
     enrich_insider.assert_called_once()
 
 
+def test_analyze_ticker_applies_finra_short_interest_enrichment(tmp_path):
+    cfg = _config(tmp_path)
+    cfg["short_interest_data"] = {"enabled": True, "fetch_live": False}
+    company = _company()
+    company["shares_outstanding"] = 10_000_000
+    (Path(cfg["data_paths"]["processed_data_dir"]) / "companies_list_enriched.json").write_text(json.dumps([company]))
+    (Path(cfg["data_paths"]["processed_data_dir"]) / "market_direction.json").write_text(json.dumps({"market_direction_status": "confirmed_uptrend"}))
+
+    from unittest.mock import patch
+    with patch("src.screeners.ticker_analysis.enrich_companies_with_short_interest_data") as enrich_short:
+        enrich_short.return_value = [
+            {
+                **company,
+                "short_interest": 1_000_000,
+                "short_days_to_cover": 3.5,
+                "short_percent_shares_outstanding": 0.10,
+                "short_interest_source": "finra_equity_short_interest",
+            }
+        ]
+        result = analyze_ticker("TEST", cfg)
+
+    assert result["short_interest"] == 1_000_000
+    assert result["short_days_to_cover"] == 3.5
+    assert result["short_percent_shares_outstanding"] == 0.10
+    enrich_short.assert_called_once()
+
+
+def test_analyze_ticker_backfills_legacy_institutional_ownership_source(tmp_path):
+    cfg = _config(tmp_path)
+    raw_dir = tmp_path / "raw"
+    market_dir = raw_dir / "financial_data" / "market_data"
+    market_dir.mkdir(parents=True)
+    cfg["data_paths"]["raw_data_dir"] = str(raw_dir)
+    company = {
+        **_company(),
+        "institutional_ownership": 1.1326799,
+        "institutional_holders": 6,
+        "institutional_data_source": "sec_13f",
+        "institutional_accumulation_score": 73.6,
+    }
+    (market_dir / "TEST_market.json").write_text(json.dumps({
+        "ticker": "TEST",
+        "institutional_ownership": 1.1326799,
+        "institutional_data_source": "yfinance_info",
+    }))
+    (Path(cfg["data_paths"]["processed_data_dir"]) / "companies_list_enriched.json").write_text(json.dumps([company]))
+    (Path(cfg["data_paths"]["processed_data_dir"]) / "market_direction.json").write_text(json.dumps({"market_direction_status": "confirmed_uptrend"}))
+
+    result = analyze_ticker("TEST", cfg)
+    text = format_ticker_analysis(result, rich_mode=True)
+
+    assert result["institutional_ownership_source"] == "yfinance_info"
+    assert "기관 보유율" in text
+    assert "113.3%" in text
+    assert "(yfinance_info)" in text
+    assert "13F 추적기관 수" in text
+    assert "내부자 보유율" in text
+    assert "공매도 잔고" in text
+    assert "미수집" in text
+
+
+def test_format_ticker_analysis_preserves_reported_zero_short_interest():
+    text = format_ticker_analysis(
+        {
+            "found": True,
+            "ticker": "ZERO",
+            "name": "Zero Short Corp",
+            "passed": False,
+            "canslim_score": 50,
+            "score_band": "watch",
+            "component_scores": {},
+            "short_interest": 0,
+            "short_interest_settlement_date": "2026-04-30",
+            "short_interest_source": "finra_equity_short_interest",
+        },
+        rich_mode=True,
+    )
+
+    assert "공매도 잔고      0" in text
+    assert "공매도/float     0.0%" in text
+    assert "공매도/발행주식  0.0%" in text
+    assert "Days to cover    0" in text
+
+
 def test_analyze_ticker_fetches_live_form4_for_one_ticker_when_enabled(tmp_path):
     cfg = _config(tmp_path)
     cfg["insider_data"] = {"enabled": True, "fetch_live": True, "limit_per_company": 3}
