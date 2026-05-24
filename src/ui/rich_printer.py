@@ -7,6 +7,7 @@ bars when a terminal is available.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from rich.console import Console
@@ -24,6 +25,64 @@ def _get_console() -> Console:
     if _console is None:
         _console = Console()
     return _console
+
+
+def _as_float(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        number = float(value)
+        if math.isfinite(number):
+            return number
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _has_real_value(value: Any) -> bool:
+    if _as_float(value) is not None:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() not in {"", "n/a", "na", "none", "null", "nan"}
+    return value is not None
+
+
+def _format_share_count(value: Any) -> str:
+    number = _as_float(value)
+    if number is None:
+        return "[dim]미수집[/dim]"
+    if abs(number) >= 1_000_000:
+        return f"[bright_white]{number / 1_000_000:.1f}M[/bright_white]"
+    if abs(number) >= 1_000:
+        return f"[bright_white]{number / 1_000:.0f}K[/bright_white]"
+    return f"[bright_white]{number:.0f}[/bright_white]"
+
+
+def _fmt_short_pct(company: Mapping[str, Any]) -> str:
+    value = _as_float(company.get("short_percent_float"))
+    suffix = "F"
+    if value is None:
+        value = _as_float(company.get("short_percent_shares_outstanding"))
+        suffix = "SO"
+    if value is None:
+        short_interest = _as_float(company.get("short_interest"))
+        if short_interest == 0:
+            return "[bright_white]0.0%[/bright_white]"
+        if short_interest is not None:
+            return "[dim]분모 없음[/dim]"
+        return _format_share_count(company.get("short_interest"))
+    color = "bright_red" if value >= 0.20 else "bright_yellow" if value >= 0.10 else "bright_white"
+    return f"[{color}]{value * 100:.1f}%{suffix}[/{color}]"
+
+
+def _fmt_days_to_cover(value: Any, short_interest: Any = None) -> str:
+    number = _as_float(value)
+    if number is None:
+        if _as_float(short_interest) == 0:
+            return "[bright_white]0[/bright_white]"
+        return "[dim]미수집[/dim]"
+    color = "bright_red" if number >= 10 else "bright_yellow" if number >= 5 else "bright_white"
+    return f"[{color}]{number:.1f}[/{color}]"
 
 
 # ── Screening criteria ─────────────────────────────────────────────────
@@ -156,6 +215,7 @@ def print_metrics_stats(
     *,
     signal_counts: Dict[str, int] | None = None,
     include_insider: bool = True,
+    include_short_interest: bool = True,
 ) -> None:
     """Print data availability as a compact bar chart table.
 
@@ -188,6 +248,10 @@ def print_metrics_stats(
         "🕵️ 내부자": [
             "insider_buy_count_90d", "net_insider_buy_value_90d",
         ],
+        "📉 공매도": [
+            "short_interest", "short_percent_float",
+            "short_percent_shares_outstanding", "short_days_to_cover",
+        ],
         "🎯 스코어/패턴": [
             "canslim_score", "breakout_volume_ratio",
             "new_52w_high", "recent_new_52w_high", "near_pivot", "valid_breakout",
@@ -195,6 +259,8 @@ def print_metrics_stats(
     }
     if not include_insider:
         groups.pop("🕵️ 내부자", None)
+    if not include_short_interest:
+        groups.pop("📉 공매도", None)
 
     table = Table(
         show_header=True,
@@ -362,6 +428,19 @@ def print_results_table(
         )
         return
 
+    all_companies = list(companies)
+    visible_companies = all_companies[:max_display]
+    show_short_columns = any(
+        _has_real_value(company.get(field))
+        for company in all_companies
+        for field in [
+            "short_percent_float",
+            "short_percent_shares_outstanding",
+            "short_interest",
+            "short_days_to_cover",
+        ]
+    )
+
     table = Table(
         show_header=True,
         header_style="bold bright_cyan",
@@ -383,9 +462,12 @@ def print_results_table(
     table.add_column("매출", justify="right", width=8)
     table.add_column("RS", justify="center", width=4)
     table.add_column("52W", justify="right", width=7)
+    if show_short_columns:
+        table.add_column("Short%", justify="right", width=8)
+        table.add_column("DTC", justify="right", width=5)
     table.add_column("시총", justify="right", width=10)
 
-    for i, company in enumerate(companies[:max_display], 1):
+    for i, company in enumerate(visible_companies, 1):
         ticker = company.get("ticker", "N/A")
         name = company.get("name", "Unknown")
         if len(name) > 24:
@@ -419,7 +501,7 @@ def print_results_table(
             except (TypeError, ValueError):
                 return "[dim]N/A[/dim]"
 
-        table.add_row(
+        row = [
             str(i),
             f"[bold bright_cyan]{ticker}[/bold bright_cyan]",
             name,
@@ -430,8 +512,11 @@ def print_results_table(
             _fmtpct(rev),
             f"[bright_white]{rs:.0f}[/bright_white]" if rs else "[dim]N/A[/dim]",
             _fmtpct(near_high),
-            _fmtcap(mktcap),
-        )
+        ]
+        if show_short_columns:
+            row.extend([_fmt_short_pct(company), _fmt_days_to_cover(company.get("short_days_to_cover"), company.get("short_interest"))])
+        row.append(_fmtcap(mktcap))
+        table.add_row(*row)
 
     console.print()
     console.print(table)

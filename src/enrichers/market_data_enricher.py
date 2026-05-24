@@ -18,6 +18,7 @@ from pathlib import Path
 from src.api.sec_client import SECClient
 from src.collectors.insider_collector import enrich_companies_with_insider_data
 from src.collectors.institutional_collector import enrich_companies_with_13f_data
+from src.collectors.short_interest_collector import enrich_companies_with_short_interest_data
 from src.enrichers.pipeline import CompositeCompanyEnricher, FunctionCompanyEnricher
 from src.screeners.market_direction import analyze_market_direction
 from src.utils.security_classifier import apply_security_classification
@@ -64,6 +65,19 @@ def _build_optional_enrichment_pipeline(config, sec_client=None) -> CompositeCom
                 ),
                 before_message="[enrich] Starting SEC Form 4 insider enrichment",
                 after_message="[enrich] Applied SEC Form 4 insider enrichment",
+                progress=_print_progress,
+            )
+        )
+    if config.get("short_interest_data", {}).get("enabled", False):
+        enrichers.append(
+            FunctionCompanyEnricher(
+                name="finra_short_interest",
+                enrich_func=lambda companies: enrich_companies_with_short_interest_data(
+                    companies,
+                    config,
+                ),
+                before_message="[enrich] Starting FINRA short-interest enrichment",
+                after_message="[enrich] Applied FINRA short-interest enrichment",
                 progress=_print_progress,
             )
         )
@@ -253,7 +267,13 @@ class MarketDataEnricher:
                     "entity_type",
                     "filer_category",
                     "institutional_ownership",
+                    "institutional_ownership_source",
                     "institutional_holders",
+                    "institutional_holders_source",
+                    "insider_ownership",
+                    "insider_ownership_source",
+                    "shares_float",
+                    "shares_float_source",
                     "industry_rs_rank",
                     "industry_stock_rank",
                     "industry_group_leader",
@@ -1173,23 +1193,34 @@ class MarketDataEnricher:
             market_cap = info.get("marketCap")
             current_price = info.get("currentPrice") or info.get("regularMarketPrice")
             shares = info.get("sharesOutstanding") or info.get("impliedSharesOutstanding")
+            float_shares = info.get("floatShares")
             if market_cap and "market_cap" not in data:
                 data["market_cap"] = int(market_cap)
             if current_price and "current_price" not in data:
                 data["current_price"] = float(current_price)
             if shares and "shares_outstanding" not in data:
                 data["shares_outstanding"] = int(shares)
+            if float_shares and "shares_float" not in data:
+                data["shares_float"] = int(float_shares)
+                data["shares_float_source"] = "yfinance_info"
             for source, target in [
                 ("sector", "sector"),
                 ("industry", "industry"),
                 ("heldPercentInstitutions", "institutional_ownership"),
                 ("numberOfInstitutionalHolders", "institutional_holders"),
+                ("heldPercentInsiders", "insider_ownership"),
             ]:
                 value = info.get(source)
                 if value is not None:
                     data[target] = value
             if "institutional_ownership" in data or "institutional_holders" in data:
                 data["institutional_data_source"] = "yfinance_info"
+            if "institutional_ownership" in data:
+                data["institutional_ownership_source"] = "yfinance_info"
+            if "institutional_holders" in data:
+                data["institutional_holders_source"] = "yfinance_info"
+            if "insider_ownership" in data:
+                data["insider_ownership_source"] = "yfinance_info"
 
         if not self._has_industry_group_metadata(data):
             sec_metadata = self._fetch_sec_company_metadata_for_ticker(ticker)

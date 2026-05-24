@@ -29,6 +29,7 @@ from src.enrichers.fundamental_fallback import enrich_missing_fundamentals
 from src.collectors.financial_data_collector import collect_financial_data
 from src.collectors.institutional_collector import enrich_companies_with_13f_data
 from src.collectors.insider_collector import enrich_companies_with_insider_data
+from src.collectors.short_interest_collector import enrich_companies_with_short_interest_data
 from src.formatters.results_formatter import ResultsFormatter
 from src.screeners.stock_screener import StockScreener
 from src.screeners.canslim_scoring import calculate_canslim_score
@@ -264,8 +265,14 @@ METRICS_FOR_COVERAGE = [
     "increased_holder_count",
     "decreased_holder_count",
     "exited_holder_count",
+    "insider_ownership",
     "insider_buy_count_90d",
     "net_insider_buy_value_90d",
+    "shares_float",
+    "short_interest",
+    "short_percent_float",
+    "short_percent_shares_outstanding",
+    "short_days_to_cover",
     "canslim_score",
     "breakout_volume_ratio",
     "new_52w_high",
@@ -393,6 +400,17 @@ def _collect_data_quality_warnings(
             "내부자 Form 4 데이터 없음: insider_data가 켜져 있지만 로컬 Form 4 XML/집계 데이터가 없습니다. "
             "필수 조건은 아니지만 내부자 신호는 비어 있습니다."
         )
+    short_enabled = bool(config.get("short_interest_data", {}).get("enabled", False))
+    if short_enabled and metrics_counts.get("short_interest", 0) == 0:
+        live_note = (
+            "fetch_live=true이지만 FINRA 응답/매칭 데이터가 없습니다."
+            if config.get("short_interest_data", {}).get("fetch_live", False)
+            else "로컬 FINRA CSV/JSON 캐시가 없고 fetch_live=false입니다."
+        )
+        warnings.append(
+            f"FINRA short interest 데이터 없음: short_interest_data가 켜져 있지만 {live_note} "
+            "단일 ticker 확인은 fetch_live를 켠 뒤 analyze 모드에서 실행하세요."
+        )
     return warnings
 
 
@@ -459,6 +477,12 @@ def _hydrate_cached_enrichment(companies, config):
             hydrated = enrich_companies_with_insider_data(hydrated, config, sec_client=None)
         except Exception as exc:
             logger.warning(f"Could not apply cached/local insider enrichment: {exc}")
+
+    if config.get("short_interest_data", {}).get("enabled", False):
+        try:
+            hydrated = enrich_companies_with_short_interest_data(hydrated, config)
+        except Exception as exc:
+            logger.warning(f"Could not apply cached/local FINRA short-interest enrichment: {exc}")
 
     return hydrated
 
@@ -539,6 +563,7 @@ def screen_stocks(config):
             len(companies),
             signal_counts=signal_counts,
             include_insider=bool(config.get("insider_data", {}).get("enabled", False)),
+            include_short_interest=bool(config.get("short_interest_data", {}).get("enabled", False)),
         )
         data_quality_warnings = _collect_data_quality_warnings(metrics_counts, len(companies), config)
         for warning in data_quality_warnings:

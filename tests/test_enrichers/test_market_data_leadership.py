@@ -216,7 +216,11 @@ def test_bulk_yfinance_market_data_uses_get_info_with_sequential_rate_limit_cont
 
         def get_info(self):
             FakeTicker.info_calls += 1
-            return {"industry": "Software"}
+            return {
+                "industry": "Software",
+                "floatShares": 8_000_000,
+                "heldPercentInsiders": 0.12,
+            }
 
     monkeypatch.setattr(market_data_enricher.yf, "Ticker", FakeTicker)
     enricher = MarketDataEnricher({
@@ -230,6 +234,8 @@ def test_bulk_yfinance_market_data_uses_get_info_with_sequential_rate_limit_cont
 
     assert data["AAA"]["market_cap"] == 123_000_000
     assert data["AAA"]["industry"] == "Software"
+    assert data["AAA"]["shares_float"] == 8_000_000
+    assert data["AAA"]["insider_ownership"] == 0.12
     assert data["BBB"]["market_cap"] == 123_000_000
     assert data["BBB"]["industry"] == "Software"
     assert FakeTicker.info_calls == 2
@@ -322,4 +328,3 @@ def test_add_industry_ranks_marks_top_groups_and_leaders():
     assert results["BBB"]["industry_group_leader"] is True
     assert results["BBB"]["industry_stock_leader"] is False
     assert results["CCC"]["industry_group_leader"] is False
-

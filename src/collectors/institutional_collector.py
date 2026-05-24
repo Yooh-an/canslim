@@ -450,6 +450,7 @@ def apply_institutional_trends(
                 if hasattr(value, "item"):
                     value = value.item()
                 company[field] = value
+        company["institutional_trend_source"] = source
         company["institutional_data_source"] = source
     return output
 

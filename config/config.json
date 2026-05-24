@@ -151,6 +151,16 @@
     "company_ciks": [],
     "limit_per_company": 20
   },
+  "short_interest_data": {
+    "_comment": "무료 FINRA Equity Short Interest. 기본은 로컬 캐시만 읽고(fetch_live=false), 단일 ticker 확인이나 소규모 후보군에서만 fetch_live=true를 권장합니다.",
+    "enabled": true,
+    "fetch_live": false,
+    "raw_short_interest_dir": "data/raw/short_interest",
+    "finra_api_url": "https://api.finra.org/data/group/otcMarket/name/EquityShortInterest",
+    "symbol_field": "issueSymbolIdentifier",
+    "limit_per_ticker": 20,
+    "timeout_seconds": 30
+  },
   "optional_api_keys": {
     "_comment": "선택 API 키. SimFin 키는 .env의 simfin_API_key 또는 SIMFIN_API_KEY에서도 읽습니다.",
     "simfin_api_key": null
