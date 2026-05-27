@@ -45,6 +45,27 @@
     "yfinance_max_workers": 6,
     "use_yfinance_info_fallback": true
   },
+  "broker_api": {
+    "_comment": "Optional broker market-data provider for single-ticker analysis. KIS is used only when KIS_APP_KEY and KIS_APP_SECRET are set; otherwise Yahoo fallback remains active.",
+    "enabled": true,
+    "provider": "kis",
+    "use_for_single_ticker": true,
+    "env": "prod",
+    "app_key_env": "KIS_APP_KEY",
+    "app_secret_env": "KIS_APP_SECRET",
+    "access_token_env": "KIS_ACCESS_TOKEN",
+    "token_cache_file": "data/raw/kis_token.json",
+    "adjusted_price": true,
+    "exchange_order": ["NAS", "NYS", "AMS"],
+    "exchange_overrides": {
+      "SPY": "AMS",
+      "QQQ": "NAS"
+    },
+    "symbol_overrides": {},
+    "max_pages": 10,
+    "timeout_seconds": 30,
+    "rate_limit_delay": 0.05
+  },
   "institutional_data": {
     "enabled": true,
     "raw_13f_dir": "data/raw/institutional_13f",

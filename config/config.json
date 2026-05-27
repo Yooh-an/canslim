@@ -125,6 +125,27 @@
     "_info_fallback_note": "use_yfinance_info_fallback=true이면 느린 yfinance info 조회까지 사용합니다. 단일 ticker 분석에서는 기관 요약 보강을 위해 기본 사용합니다.",
     "use_yfinance_info_fallback": true
   },
+  "broker_api": {
+    "_comment": "단일 ticker 분석용 증권사 시세 provider입니다. KIS_APP_KEY/KIS_APP_SECRET이 있으면 한국투자증권 해외주식 기간별시세를 먼저 쓰고, 없거나 실패하면 Yahoo로 fallback합니다.",
+    "enabled": true,
+    "provider": "kis",
+    "use_for_single_ticker": true,
+    "env": "prod",
+    "app_key_env": "KIS_APP_KEY",
+    "app_secret_env": "KIS_APP_SECRET",
+    "access_token_env": "KIS_ACCESS_TOKEN",
+    "token_cache_file": "data/raw/kis_token.json",
+    "adjusted_price": true,
+    "exchange_order": ["NAS", "NYS", "AMS"],
+    "exchange_overrides": {
+      "SPY": "AMS",
+      "QQQ": "NAS"
+    },
+    "symbol_overrides": {},
+    "max_pages": 10,
+    "timeout_seconds": 30,
+    "rate_limit_delay": 0.05
+  },
   "institutional_data": {
     "_comment": "무료 SEC 13F 기반 기관 보유 추세. 기본 ON이며 manager_ciks의 주요 운용사 최신/직전 13F를 내려받습니다.",
     "enabled": true,

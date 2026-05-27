@@ -1,0 +1,537 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#121417" />
+    <meta name="application-name" content="CANSLIM SEPA" />
+    <meta name="apple-mobile-web-app-title" content="CANSLIM SEPA" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <title>CANSLIM SEPA Dashboard</title>
+    <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#mainWorkspace">Skip to workspace</a>
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="brand-mark">CS</div>
+        <div>
+          <p class="eyebrow">Growth Stock Workstation</p>
+          <h1>CANSLIM SEPA</h1>
+        </div>
+      </div>
+      <div class="toolbar">
+        <label class="field compact">
+          <span>Profile</span>
+          <select id="profileSelect"></select>
+        </label>
+        <label class="field money">
+          <span>Equity</span>
+          <input id="accountEquity" type="number" min="0" max="1000000000" step="1000" value="100000" inputmode="decimal" />
+        </label>
+        <label class="field tiny">
+          <span>Risk %</span>
+          <input id="riskPerTrade" type="number" min="0" max="5" step="0.1" value="0.5" inputmode="decimal" />
+        </label>
+        <div class="app-status syncing" id="appStatus" role="status" aria-live="polite" title="Dashboard connection status">
+          <i></i>
+          <span id="appStatusText">Starting</span>
+        </div>
+        <span class="runtime-badge" id="runtimeBadge" title="Runtime metadata unavailable">v-</span>
+        <input class="file-input" id="workspaceImportInput" type="file" accept="application/json,.json" aria-label="Import workspace snapshot file" />
+        <button class="icon-button subtle" id="workspaceImportButton" type="button" aria-label="Import workspace snapshot" title="Import workspace snapshot">⇧</button>
+        <button class="icon-button subtle" id="workspaceExportButton" type="button" aria-label="Export workspace snapshot" title="Export workspace snapshot">⇩</button>
+        <button class="icon-button subtle" id="workspaceBackupButton" type="button" aria-label="Restore workspace backup" title="Restore workspace backup">↺</button>
+        <button class="icon-button" id="refreshButton" type="button" aria-label="Refresh dashboard" title="Refresh dashboard">↻</button>
+      </div>
+    </header>
+
+    <main class="workspace" id="mainWorkspace" tabindex="-1">
+      <section class="disclosure-band" aria-label="Research disclosure">
+        <div>
+          <p class="eyebrow">Research Controls</p>
+          <strong id="disclosureTitle">Research aid only</strong>
+        </div>
+        <span id="disclosureText">Verify source data before acting.</span>
+        <em id="disclosureFreshness">Syncing freshness</em>
+      </section>
+
+      <section class="market-band" aria-label="Market economy">
+        <div class="market-lede">
+          <p class="eyebrow">Market Direction</p>
+          <div class="direction-row">
+            <strong id="marketStatus">loading</strong>
+            <span id="marketAsOf"></span>
+          </div>
+          <div class="exposure">
+            <span>Exposure</span>
+            <meter id="exposureMeter" min="0" max="1" value="0"></meter>
+            <b id="exposureValue">0%</b>
+          </div>
+        </div>
+        <div class="indicator-grid" id="indicatorGrid"></div>
+      </section>
+
+      <section class="strategy-strip" aria-label="Strategy profile">
+        <div class="strategy-lede">
+          <p class="eyebrow">Strategy Lens</p>
+          <h2 id="profileName">Profile</h2>
+          <span id="profileResultFile">Loading rules</span>
+        </div>
+        <div class="strategy-rule-grid" id="profileRuleGrid"></div>
+      </section>
+
+      <section class="profile-matrix" aria-label="Profile matrix">
+        <div class="profile-matrix-head">
+          <div>
+            <p class="eyebrow">Profile Matrix</p>
+            <h2>전략 비교</h2>
+          </div>
+          <div class="profile-matrix-tools">
+            <span id="profileMatrixSummary">Loading profiles</span>
+            <button class="subtle" id="profileSweepButton" type="button">Screen all</button>
+          </div>
+        </div>
+        <div class="profile-matrix-grid" id="profileMatrix"></div>
+      </section>
+
+      <section class="action-center" aria-label="Daily action center">
+        <div class="action-lede">
+          <p class="eyebrow">Action Center</p>
+          <h2 id="actionPosture">Loading</h2>
+          <span id="actionBrief">Syncing candidates</span>
+        </div>
+        <div class="action-metrics" id="actionMetrics"></div>
+        <div class="action-list" id="actionList"></div>
+      </section>
+
+      <section class="decision-brief" id="decisionBrief" aria-label="Decision brief">
+        <div class="decision-lede">
+          <p class="eyebrow">Decision Brief</p>
+          <h2 id="decisionTitle">Loading</h2>
+          <span id="decisionSummary">Syncing session checks</span>
+        </div>
+        <div class="decision-metrics" id="decisionMetrics"></div>
+        <div class="decision-lanes">
+          <div class="decision-lane">
+            <b>Focus</b>
+            <div id="decisionFocus"></div>
+          </div>
+          <div class="decision-lane">
+            <b>Next</b>
+            <div id="decisionSteps"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel session-journal" aria-label="Session journal">
+        <div class="panel-head slim">
+          <div>
+            <p class="eyebrow">Session Journal</p>
+            <h2>운영 기록</h2>
+          </div>
+          <div class="journal-controls">
+            <label class="field tiny">
+              <span>Date</span>
+              <input id="sessionJournalDate" type="date" />
+            </label>
+            <button class="subtle" id="saveJournalButton" type="button">Save</button>
+            <span id="journalSavedAt">Not saved</span>
+          </div>
+        </div>
+        <div class="journal-grid">
+          <label class="field journal-field">
+            <span>Market Thesis</span>
+            <textarea id="journalMarketThesis" rows="4" maxlength="2000"></textarea>
+          </label>
+          <label class="field journal-field">
+            <span>Watchlist Focus</span>
+            <textarea id="journalWatchlistFocus" rows="4" maxlength="2000"></textarea>
+          </label>
+          <label class="field journal-field">
+            <span>Risk Notes</span>
+            <textarea id="journalRiskNotes" rows="4" maxlength="2000"></textarea>
+          </label>
+          <label class="field journal-field">
+            <span>Post-session Review</span>
+            <textarea id="journalPostReview" rows="4" maxlength="2000"></textarea>
+          </label>
+        </div>
+      </section>
+
+      <section class="dashboard-grid">
+        <article class="panel analyzer-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Single Stock</p>
+              <h2>종목 분석</h2>
+            </div>
+            <form class="ticker-form" id="tickerForm">
+              <label class="field">
+                <span>Ticker</span>
+                <input id="tickerInput" name="ticker" autocomplete="off" placeholder="IESC" />
+              </label>
+              <button type="submit">분석</button>
+              <button class="subtle" id="reviewAnalysisButton" type="button" disabled>검토 추가</button>
+              <button class="subtle" id="analysisExportButton" type="button" disabled>기록 저장</button>
+            </form>
+          </div>
+          <div class="analysis-layout">
+            <div class="stock-brief">
+              <div class="ticker-lockup">
+                <strong id="analysisTicker">-</strong>
+                <span id="analysisName">분석 대기</span>
+              </div>
+              <div class="score-dial">
+                <canvas id="scoreCanvas" width="180" height="180"></canvas>
+                <div>
+                  <b id="analysisScore">-</b>
+                  <span id="analysisBand">score</span>
+                </div>
+              </div>
+            </div>
+            <div class="chart-box">
+              <canvas id="priceCanvas" width="760" height="260"></canvas>
+            </div>
+          </div>
+          <div class="metric-strip" id="analysisMetrics"></div>
+          <div class="trade-plan-grid" id="tradePlan"></div>
+          <div class="setup-brief" id="setupBrief"></div>
+          <div class="component-row" id="componentScores"></div>
+          <div class="reason-grid">
+            <div>
+              <p class="reason-title">Pass</p>
+              <ul id="passReasons"></ul>
+            </div>
+            <div>
+              <p class="reason-title">Watch</p>
+              <ul id="failReasons"></ul>
+            </div>
+          </div>
+        </article>
+
+        <aside class="side-stack">
+          <section class="panel health-panel">
+            <div class="panel-head slim">
+              <div>
+                <p class="eyebrow">Data Operations</p>
+                <h2>상태</h2>
+              </div>
+            </div>
+            <div class="health-summary" id="healthSummary"></div>
+            <div class="check-list" id="healthChecks"></div>
+            <div class="ops-note" id="healthWarnings"></div>
+            <div class="candidate-quality" id="candidateQuality"></div>
+            <div class="diagnostics-panel" id="diagnosticsPanel"></div>
+            <div class="security-posture-panel" id="securityPosturePanel"></div>
+            <div class="release-readiness-panel" id="releaseReadinessPanel"></div>
+            <div class="request-trace-panel" id="requestTracePanel"></div>
+            <div class="client-events-panel" id="clientEventsPanel"></div>
+            <div class="ops-runbook" id="opsRunbook"></div>
+            <div class="job-box" id="jobStatus"></div>
+            <div class="job-actions">
+              <button type="button" id="runNextButton">Run Next</button>
+              <button type="button" id="runEnrichButton">Enrich</button>
+              <button type="button" id="runScreenButton">Screen</button>
+              <button type="button" id="runTvExportButton">TV Export</button>
+              <button type="button" id="sessionReportButton">Report</button>
+              <button type="button" id="supportBundleButton">Support</button>
+              <button class="cancel-job-button" type="button" id="cancelJobButton">Stop</button>
+            </div>
+            <div class="job-history" id="jobHistory"></div>
+            <div class="artifact-list" id="artifactList" aria-live="polite"></div>
+          </section>
+
+          <section class="panel provenance-panel">
+            <div class="panel-head slim">
+              <div>
+                <p class="eyebrow">Evidence Log</p>
+                <h2>근거 파일</h2>
+              </div>
+            </div>
+            <div class="provenance-summary" id="provenanceSummary"></div>
+            <div class="provenance-list" id="provenanceList"></div>
+          </section>
+
+          <section class="panel review-panel">
+            <div class="panel-head slim">
+              <div>
+                <p class="eyebrow">Review Queue</p>
+                <h2>검토 목록 <span id="reviewCount">0</span></h2>
+              </div>
+              <div class="mini-actions">
+                <select class="mini-select review-view-select" id="reviewViewSelect" aria-label="Saved review view" title="Saved review view">
+                  <option value="">Unsaved view</option>
+                </select>
+                <button class="icon-button subtle" id="saveReviewViewButton" type="button" aria-label="Save review view" title="Save review view">★</button>
+                <button class="icon-button subtle" id="deleteReviewViewButton" type="button" aria-label="Delete selected review view" title="Delete selected review view">×</button>
+                <input class="mini-input review-search-input" id="reviewSearchInput" type="search" maxlength="80" placeholder="Search" aria-label="Search review queue" title="Search review queue" />
+                <select class="mini-select review-sort-select" id="reviewSortSelect" aria-label="Review sort field" title="Review sort field">
+                  <option value="added_at">Newest</option>
+                  <option value="status">Status</option>
+                  <option value="priority">Priority</option>
+                  <option value="score">Score</option>
+                  <option value="risk">Risk</option>
+                  <option value="capital">Capital</option>
+                  <option value="shares">Shares</option>
+                  <option value="ticker">Ticker</option>
+                </select>
+                <button class="icon-button subtle" id="reviewSortDirection" type="button" aria-label="Toggle review sort direction" title="Toggle review sort direction">↓</button>
+                <select class="mini-select review-status-select" id="reviewStatusFilter" aria-label="Review status filter" title="Review status filter">
+                  <option value="">All</option>
+                  <option value="watch">Watch</option>
+                  <option value="ready">Ready</option>
+                  <option value="pass">Pass</option>
+                  <option value="bought">Bought</option>
+                  <option value="sold">Sold</option>
+                </select>
+                <select class="mini-select review-priority-select" id="reviewPriorityFilter" aria-label="Review priority filter" title="Review priority filter">
+                  <option value="">All priority</option>
+                  <option value="high">High</option>
+                  <option value="normal">Normal</option>
+                  <option value="low">Low</option>
+                </select>
+                <select class="mini-select review-tag-select" id="reviewTagFilter" aria-label="Review tag filter" title="Review tag filter">
+                  <option value="">All tags</option>
+                </select>
+                <button class="icon-button subtle" id="reviewClearFiltersButton" type="button" aria-label="Clear review filters" title="Clear review filters" hidden>⌫</button>
+                <select class="mini-select" id="reviewExportFormat" aria-label="Review export format" title="Review export format">
+                  <option value="csv">CSV</option>
+                  <option value="txt">Tickers</option>
+                  <option value="tradingview">TradingView</option>
+                  <option value="json">JSON</option>
+                </select>
+                <button class="icon-button subtle" id="exportReviewButton" type="button" aria-label="Export review queue" title="Export review queue">↓</button>
+                <button class="icon-button subtle" id="clearReviewButton" type="button" aria-label="Clear review queue" title="Clear review queue">×</button>
+              </div>
+            </div>
+            <div class="risk-guardrails">
+              <label class="field tiny">
+                <span>Max Cap %</span>
+                <input id="maxCapitalPct" type="number" min="0" max="100" step="1" value="80" inputmode="decimal" />
+              </label>
+              <label class="field tiny">
+                <span>Max Risk %</span>
+                <input id="maxQueueRiskPct" type="number" min="0" max="25" step="0.5" value="5" inputmode="decimal" />
+              </label>
+              <label class="field tiny">
+                <span>Open Risk %</span>
+                <input id="maxOpenRiskPct" type="number" min="0" max="25" step="0.5" value="6" inputmode="decimal" />
+              </label>
+              <label class="field tiny">
+                <span>Plan Conc %</span>
+                <input id="maxConcentrationPct" type="number" min="0" max="100" step="1" value="60" inputmode="decimal" />
+              </label>
+              <label class="field tiny">
+                <span>Open Conc %</span>
+                <input id="maxOpenConcentrationPct" type="number" min="0" max="100" step="1" value="60" inputmode="decimal" />
+              </label>
+            </div>
+            <div class="review-bulk-bar" id="reviewBulkBar">
+              <label class="bulk-check">
+                <input id="reviewSelectVisible" type="checkbox" aria-label="Select visible review items" />
+                <span>Visible</span>
+              </label>
+              <b id="reviewSelectedCount">0 selected</b>
+              <select class="mini-select" id="reviewBulkStatus" aria-label="Bulk review status">
+                <option value="watch">Watch</option>
+                <option value="ready">Ready</option>
+                <option value="pass">Pass</option>
+                <option value="bought">Bought</option>
+                <option value="sold">Sold</option>
+              </select>
+              <button class="subtle" id="reviewBulkApply" type="button" disabled>Apply</button>
+              <select class="mini-select" id="reviewBulkPriority" aria-label="Bulk review priority">
+                <option value="high">High</option>
+                <option value="normal">Normal</option>
+                <option value="low">Low</option>
+              </select>
+              <button class="subtle" id="reviewBulkPriorityApply" type="button" disabled>Priority</button>
+              <input class="mini-input review-bulk-tag-input" id="reviewBulkTags" type="text" maxlength="120" placeholder="tag, theme" aria-label="Bulk review tags" title="Bulk review tags" disabled />
+              <button class="subtle" id="reviewBulkTagAdd" type="button" disabled>Add tag</button>
+              <button class="subtle" id="reviewBulkTagReplace" type="button" disabled>Replace tags</button>
+              <button class="subtle" id="reviewBulkExport" type="button" disabled>Export</button>
+              <button class="subtle danger-text" id="reviewBulkRemove" type="button" disabled>Remove</button>
+            </div>
+            <form class="review-import" id="reviewImportForm">
+              <label class="field">
+                <span>Import Tickers</span>
+                <textarea id="reviewImportTickers" rows="2" maxlength="600" placeholder="NASDAQ:STRL, IESC, BRK.B"></textarea>
+              </label>
+              <button class="subtle" id="reviewImportButton" type="submit">Import</button>
+            </form>
+            <form class="review-price-import" id="reviewPriceForm">
+              <label class="field">
+                <span>Update Last Prices</span>
+                <textarea id="reviewPriceUpdates" rows="2" maxlength="1200" placeholder="AAPL 186.50&#10;MSFT, 430.10"></textarea>
+              </label>
+              <button class="subtle" id="reviewPriceButton" type="submit">Update</button>
+            </form>
+            <div class="review-import-report" id="reviewImportReport" hidden></div>
+            <div class="review-summary" id="reviewSummary"></div>
+            <div class="review-activity" id="reviewActivity"></div>
+            <div class="review-list" id="reviewList"></div>
+          </section>
+
+          <section class="panel news-panel">
+            <div class="panel-head slim">
+              <div>
+                <p class="eyebrow">Macro Tape</p>
+                <h2>주요 뉴스</h2>
+              </div>
+            </div>
+            <div class="news-list" id="newsList"></div>
+          </section>
+        </aside>
+      </section>
+
+      <section class="panel screener-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">CANSLIM Screener</p>
+            <h2>후보군</h2>
+          </div>
+          <div class="screener-controls">
+            <label class="field saved-view-field">
+              <span>View</span>
+              <select id="screenerViewSelect">
+                <option value="">Unsaved view</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Search</span>
+              <input id="candidateSearch" placeholder="ticker, sector, industry" />
+            </label>
+            <label class="field narrow">
+              <span>Min Score</span>
+              <input id="minScore" type="number" min="0" max="100" step="1" value="70" />
+            </label>
+            <label class="field narrow">
+              <span>Setup</span>
+              <select id="setupFilter">
+                <option value="">All</option>
+                <option value="near_pivot">Near pivot</option>
+                <option value="forming_base">Forming base</option>
+                <option value="extended">Extended</option>
+                <option value="breakout_confirmed">Breakout confirmed</option>
+                <option value="breakout_unconfirmed">Breakout unconfirmed</option>
+                <option value="below_pivot_not_actionable">Below pivot</option>
+              </select>
+            </label>
+            <div class="screener-actions">
+              <button class="icon-button subtle" id="saveScreenerViewButton" type="button" aria-label="Save screener view" title="Save screener view">★</button>
+              <button class="icon-button subtle" id="deleteScreenerViewButton" type="button" aria-label="Delete selected screener view" title="Delete selected screener view">×</button>
+              <button class="icon-button subtle" id="exportScreenerButton" type="button" aria-label="Export current screener view" title="Export current screener view">↓</button>
+              <button class="icon-button subtle" id="bulkReviewButton" type="button" aria-label="Add visible candidates to review queue" title="Add visible candidates to review queue">＋</button>
+            </div>
+          </div>
+        </div>
+        <div class="stats-row" id="candidateStats"></div>
+        <div class="candidate-compare" id="candidateCompare" hidden>
+          <div class="compare-head">
+            <div>
+              <p class="eyebrow">Candidate Compare</p>
+              <b id="compareSummary">0 selected</b>
+            </div>
+            <div class="compare-actions">
+              <button class="subtle" id="exportCompareButton" type="button" disabled>Export</button>
+              <button class="subtle" id="clearCompareButton" type="button">Clear</button>
+            </div>
+          </div>
+          <div class="compare-grid" id="compareGrid"></div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th aria-label="Compare candidates"></th>
+                <th><button class="sort-button" type="button" data-sort="ticker">Ticker</button></th>
+                <th><button class="sort-button" type="button" data-sort="name">Company</button></th>
+                <th><button class="sort-button" type="button" data-sort="score">Score</button></th>
+                <th><button class="sort-button" type="button" data-sort="setup">Setup</button></th>
+                <th><button class="sort-button" type="button" data-sort="rs">RS</button></th>
+                <th><button class="sort-button" type="button" data-sort="eps">EPS Q</button></th>
+                <th><button class="sort-button" type="button" data-sort="revenue">Revenue</button></th>
+                <th><button class="sort-button" type="button" data-sort="pivot">Pivot Dist.</button></th>
+                <th><button class="sort-button" type="button" data-sort="market_cap">Market Cap</button></th>
+                <th aria-label="Review queue"></th>
+              </tr>
+            </thead>
+            <tbody id="candidateRows"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <div class="workspace-import-modal" id="workspaceImportModal" role="dialog" aria-modal="true" aria-labelledby="workspaceImportModalTitle" tabindex="-1" hidden>
+      <section class="workspace-import-card">
+        <div class="workspace-import-head">
+          <div>
+            <p class="eyebrow">Workspace Import</p>
+            <h2 id="workspaceImportModalTitle">Restore snapshot</h2>
+          </div>
+          <span id="workspaceImportFilename">workspace.json</span>
+        </div>
+        <div class="workspace-import-grid" id="workspaceImportMetrics"></div>
+        <div class="workspace-import-detail" id="workspaceImportDetail"></div>
+        <div class="workspace-import-actions">
+          <button class="subtle" id="workspaceImportCancelButton" type="button">Cancel</button>
+          <button id="workspaceImportConfirmButton" type="button">Import</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="workspace-backup-modal" id="workspaceBackupModal" role="dialog" aria-modal="true" aria-labelledby="workspaceBackupModalTitle" tabindex="-1" hidden>
+      <section class="workspace-import-card workspace-backup-card">
+        <div class="workspace-import-head">
+          <div>
+            <p class="eyebrow">Workspace Backups</p>
+            <h2 id="workspaceBackupModalTitle">복구 지점</h2>
+          </div>
+          <span id="workspaceBackupSummary">Loading backups</span>
+        </div>
+        <div class="workspace-backup-list" id="workspaceBackupList"></div>
+        <div class="workspace-audit-tools" aria-label="Operations filters">
+          <input class="mini-input workspace-audit-search" id="workspaceAuditSearch" type="search" maxlength="80" placeholder="Search operations" aria-label="Search workspace operations" title="Search workspace operations" />
+          <select class="mini-select workspace-audit-type" id="workspaceAuditType" aria-label="Workspace operation type" title="Workspace operation type">
+            <option value="">All operations</option>
+            <option value="download">Downloads</option>
+            <option value="workspace">Workspace</option>
+            <option value="maintenance">Maintenance</option>
+          </select>
+          <button class="subtle workspace-audit-clear" id="workspaceAuditClearButton" type="button" aria-label="Clear workspace operation filters" title="Clear workspace operation filters" disabled>Clear</button>
+        </div>
+        <div class="workspace-audit-list" id="workspaceAuditList"></div>
+        <div class="workspace-import-actions">
+          <button class="subtle" id="workspaceAuditExportButton" type="button">Download operations</button>
+          <button class="subtle" id="workspaceBackupCloseButton" type="button">Close</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="view-name-modal" id="viewNameModal" role="dialog" aria-modal="true" aria-labelledby="viewNameModalTitle" tabindex="-1" hidden>
+      <form class="workspace-import-card view-name-card" id="viewNameForm" novalidate>
+        <div class="workspace-import-head">
+          <div>
+            <p class="eyebrow" id="viewNameMode">Saved View</p>
+            <h2 id="viewNameModalTitle">Save view</h2>
+          </div>
+          <span id="viewNameSummary">Current filters</span>
+        </div>
+        <label class="view-name-field">
+          <span>Name</span>
+          <input id="viewNameInput" type="text" maxlength="40" autocomplete="off" aria-describedby="viewNameError" />
+        </label>
+        <div class="view-name-error" id="viewNameError" role="alert" hidden></div>
+        <div class="workspace-import-actions">
+          <button class="subtle" id="viewNameCancelButton" type="button">Cancel</button>
+          <button id="viewNameConfirmButton" type="submit">Save</button>
+        </div>
+      </form>
+    </div>
+
+    <script src="/assets/app.js" type="module"></script>
+  </body>
+</html>
