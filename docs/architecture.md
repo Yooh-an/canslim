@@ -171,6 +171,7 @@ growth-stock-screener/
 - **외부 API**:
   - SEC EDGAR API: 재무 데이터 소스
   - yfinance: 주가 데이터 소스
+  - 한국투자증권 KIS Open API(선택적): 단일 티커 분석용 해외주식 수정주가 일봉 보강
   - SimFin API(선택적): SEC 누락 재무지표 보강
 
 - **주요 라이브러리**:

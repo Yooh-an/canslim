@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import logging
 from contextlib import redirect_stdout
+from pathlib import Path
 from typing import Callable, Optional
 
 from rich.console import Console
@@ -47,6 +48,11 @@ MENU_CHOICES = {
     "4": "update",
     "update": "update",
     "업데이트": "update",
+    "5": "web",
+    "web": "web",
+    "dashboard": "web",
+    "대시보드": "web",
+    "웹": "web",
     "0": "exit",
     "q": "exit",
     "quit": "exit",
@@ -80,6 +86,23 @@ def normalize_menu_choice(choice: str) -> str:
     return MENU_CHOICES.get(str(choice or "").strip().lower(), "unknown")
 
 
+def normalize_profile_choice(
+    choice: str,
+    *,
+    default: str,
+    available_profiles: Optional[set[str]] = None,
+) -> Optional[str]:
+    """Normalize a profile prompt input to a known profile name."""
+    normalized = str(choice or "").strip()
+    if not normalized:
+        return default
+
+    selected = PROFILE_CHOICES.get(normalized, normalized)
+    if available_profiles is not None and selected not in available_profiles:
+        return None
+    return selected
+
+
 class TerminalApp:
     """Interactive terminal application with injectable actions for tests.
 
@@ -98,6 +121,7 @@ class TerminalApp:
         analyze_action: Optional[Callable[[str, str], str]] = None,
         status_action: Optional[Callable[[str], str]] = None,
         update_action: Optional[Callable[[str], str]] = None,
+        web_action: Optional[Callable[[], str]] = None,
     ):
         self.config_path = config_path
         self.default_profile = default_profile
@@ -107,6 +131,7 @@ class TerminalApp:
         self.analyze_action = analyze_action or self._analyze_action
         self.status_action = status_action or self._status_action
         self.update_action = update_action or self._update_action
+        self.web_action = web_action or self._web_action
 
         # Detect whether we're in "rich mode" (real terminal) or "plain
         # mode" (test harness).  When callers inject their own print,
@@ -153,6 +178,7 @@ class TerminalApp:
                 "2. Ticker 분석\n"
                 "3. 현재 상태 확인\n"
                 "4. 필요한 단계 자동 업데이트\n"
+                "5. 웹 대시보드 열기\n"
                 "0. 종료"
             )
             return
@@ -162,6 +188,7 @@ class TerminalApp:
             ("2", "🔍", "Ticker 분석", "개별 종목 상세 분석", "green"),
             ("3", "📋", "현재 상태 확인", "파이프라인 데이터 현황", "yellow"),
             ("4", "🔄", "자동 업데이트", "필요한 단계 자동 실행", "magenta"),
+            ("5", "🌐", "웹 대시보드", "브라우저 워크스테이션 실행", "bright_blue"),
             ("0", "🚪", "종료", "프로그램 종료", "red"),
         ]
 
@@ -197,15 +224,25 @@ class TerminalApp:
         self.console.print(panel)
 
     def _prompt_profile(self, *, default: str) -> str:
+        available_profiles = self._available_profiles()
+
         if not self._rich_mode:
             self.print("\n프로필 선택:")
             self.print("1. canslim_pure - 엄격한 CAN SLIM")
             self.print("2. canslim_watchlist - 넓은 후보군")
             self.print("3. canslim_score_rank - 전체 순위 정렬")
-            choice = self.input(f"프로필 [기본: {default}]: ").strip()
-            if not choice:
-                return default
-            return PROFILE_CHOICES.get(choice, choice)
+            while True:
+                choice = self.input(f"프로필 [기본: {default}]: ")
+                selected = normalize_profile_choice(
+                    choice,
+                    default=default,
+                    available_profiles=available_profiles,
+                )
+                if selected:
+                    return selected
+                self._print_error(
+                    "알 수 없는 프로필입니다. 1-3 중 선택하거나 프로필 이름을 입력해주세요."
+                )
 
         profiles = [
             ("1", "canslim_pure", "엄격한 CAN SLIM", "🎯", "bright_red"),
@@ -243,12 +280,27 @@ class TerminalApp:
         )
         self.console.print(panel)
 
-        choice = self.input(f"  프로필 [기본: {default}]: ").strip()
-        if not choice:
-            return default
-        selected = PROFILE_CHOICES.get(choice, choice)
-        self.console.print(f"  [dim]→ 선택된 프로필:[/dim] [bold cyan]{selected}[/bold cyan]")
-        return selected
+        while True:
+            choice = self.input(f"  프로필 [기본: {default}]: ")
+            selected = normalize_profile_choice(
+                choice,
+                default=default,
+                available_profiles=available_profiles,
+            )
+            if selected:
+                self.console.print(
+                    f"  [dim]→ 선택된 프로필:[/dim] [bold cyan]{selected}[/bold cyan]"
+                )
+                return selected
+            self._print_error(
+                "알 수 없는 프로필입니다. 1-3 중 선택하거나 프로필 이름을 입력해주세요."
+            )
+
+    def _available_profiles(self) -> Optional[set[str]]:
+        profile_dir = Path(self.config_path).expanduser().resolve().parent / "profiles"
+        if not profile_dir.exists():
+            return None
+        return {path.stem for path in profile_dir.glob("*.json") if path.is_file()}
 
     def _print_result(self, text: str, *, title: str = "결과", style: str = "green") -> None:
         """Print an action result inside a styled panel."""
@@ -354,6 +406,15 @@ class TerminalApp:
                     self._print_success(result)
                 else:
                     self.print(self.update_action(profile))
+
+            elif action == "web":
+                if self._rich_mode:
+                    self.console.print("  [dim]브라우저 대시보드를 실행합니다. 종료하려면 Ctrl+C를 누르세요.[/dim]")
+                    result = self.web_action()
+                    if result:
+                        self._print_success(result)
+                else:
+                    self.print(self.web_action())
             else:
                 self._print_error("알 수 없는 선택입니다. 다시 선택해주세요.")
 
@@ -396,6 +457,12 @@ class TerminalApp:
         gss.ensure_directories(config)
         gss.update_pipeline(config)
         return "업데이트 실행 완료"
+
+    def _web_action(self) -> str:
+        from src.web.server import run as run_web_dashboard
+
+        run_web_dashboard("127.0.0.1", 8765, quiet=True, open_browser=True)
+        return "웹 대시보드가 종료되었습니다."
 
     def _capture_status_text(self, status) -> str:
         from src.utils.pipeline_status import print_pipeline_status

@@ -48,8 +48,7 @@ def test_enrich_single_ticker_market_data_uses_price_history_and_market_cap_fall
     history = pd.DataFrame({"Close": range(100, 360), "Volume": [1_000_000] * 260}, index=dates)
     benchmark = pd.DataFrame({"Close": [100] * 260, "Volume": [1_000_000] * 260}, index=dates)
     enricher._fetch_yfinance_market_data = lambda tickers: {"TEST": {"ticker": "TEST", "shares_outstanding": 10}}
-    enricher._download_price_history = lambda tickers, period, chunk_size, cached_only=False: {"TEST": history}
-    enricher._download_single_history = lambda ticker, period: benchmark
+    enricher._download_single_history = lambda ticker, period: history if ticker == "TEST" else benchmark
     enricher._load_market_data_files = lambda directory: {"AAA": {"ticker": "AAA", "rs_score": -1.0}}
 
     enriched = enricher.enrich_single_ticker_market_data({"ticker": "TEST", "name": "Test"})
@@ -59,6 +58,32 @@ def test_enrich_single_ticker_market_data_uses_price_history_and_market_cap_fall
     assert enriched["market_cap_source"] == "price_history_x_shares"
     assert enriched["price_vs_52w_high"] == 1.0
     assert enriched["rs_rating"] == 99.0
+
+
+def test_download_single_history_prefers_kis_broker_provider(monkeypatch, tmp_path):
+    dates = pd.date_range("2025-01-01", periods=3, freq="B")
+    broker_history = pd.DataFrame({"Close": [10, 11, 12], "Volume": [100, 200, 300]}, index=dates)
+    broker_history.attrs["source"] = "kis_dailyprice"
+
+    class FakeKISClient:
+        def get_overseas_daily_history(self, ticker, period, adjusted):
+            assert ticker == "TEST"
+            assert period == "15mo"
+            assert adjusted is True
+            return broker_history
+
+    monkeypatch.setattr(market_data_enricher.KISClient, "from_config", staticmethod(lambda config: FakeKISClient()))
+    enricher = MarketDataEnricher(
+        {
+            "data_paths": {"raw_data_dir": str(tmp_path / "raw"), "processed_data_dir": str(tmp_path)},
+            "broker_api": {"enabled": True, "provider": "kis", "use_for_single_ticker": True, "adjusted_price": True},
+        }
+    )
+
+    history = enricher._download_single_history("TEST", "15mo")
+
+    assert history is broker_history
+    assert (tmp_path / "raw" / "price_history" / "TEST.csv").exists()
 
 
 def test_market_enrichment_refetches_cached_ticker_missing_market_cap_and_preserves_metrics(tmp_path):

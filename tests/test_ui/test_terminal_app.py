@@ -3,7 +3,7 @@
 import logging
 from types import SimpleNamespace
 
-from src.ui.terminal_app import TerminalApp, normalize_menu_choice
+from src.ui.terminal_app import TerminalApp, normalize_menu_choice, normalize_profile_choice
 
 
 class IO:
@@ -22,7 +22,45 @@ class IO:
 def test_normalize_menu_choice_accepts_number_and_alias():
     assert normalize_menu_choice("1") == "screen"
     assert normalize_menu_choice("ticker") == "analyze"
+    assert normalize_menu_choice("dashboard") == "web"
     assert normalize_menu_choice("q") == "exit"
+
+
+def test_normalize_profile_choice_rejects_unknown_choice():
+    profiles = {"canslim_pure", "canslim_watchlist", "canslim_score_rank"}
+
+    assert (
+        normalize_profile_choice(
+            "",
+            default="canslim_watchlist",
+            available_profiles=profiles,
+        )
+        == "canslim_watchlist"
+    )
+    assert (
+        normalize_profile_choice(
+            "2",
+            default="canslim_watchlist",
+            available_profiles=profiles,
+        )
+        == "canslim_watchlist"
+    )
+    assert (
+        normalize_profile_choice(
+            "canslim_score_rank",
+            default="canslim_watchlist",
+            available_profiles=profiles,
+        )
+        == "canslim_score_rank"
+    )
+    assert (
+        normalize_profile_choice(
+            "4",
+            default="canslim_watchlist",
+            available_profiles=profiles,
+        )
+        is None
+    )
 
 
 def test_terminal_app_can_exit_from_menu():
@@ -66,6 +104,46 @@ def test_terminal_app_runs_screen_with_watchlist_profile():
 
     assert calls == ["canslim_watchlist"]
     assert "screen done" in "\n".join(io.outputs)
+
+
+def test_terminal_app_reprompts_for_invalid_profile_choice():
+    io = IO(["4", "4", "2", "0"])
+    calls = []
+
+    def update_action(profile):
+        calls.append(profile)
+        return "update done"
+
+    app = TerminalApp(
+        input_func=io.input,
+        print_func=io.print,
+        update_action=update_action,
+    )
+
+    app.run()
+
+    assert calls == ["canslim_watchlist"]
+    joined = "\n".join(io.outputs)
+    assert "알 수 없는 프로필" in joined
+    assert "update done" in joined
+
+
+def test_terminal_app_runs_web_dashboard_action():
+    io = IO(["5", "0"])
+    calls = []
+
+    def web_action():
+        calls.append("web")
+        return "dashboard started"
+
+    app = TerminalApp(input_func=io.input, print_func=io.print, web_action=web_action)
+
+    app.run()
+
+    assert calls == ["web"]
+    joined = "\n".join(io.outputs)
+    assert "웹 대시보드" in joined
+    assert "dashboard started" in joined
 
 
 def test_ensure_logger_initializes_growth_screener_logger():

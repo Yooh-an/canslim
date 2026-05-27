@@ -13,10 +13,14 @@ if [ "$#" -eq 0 ]; then
 fi
 
 case "$1" in
-  download|parse|enrich|leadership|financials|screen|status|update|analyze|tv-export)
+  download|parse|enrich|leadership|financials|screen|status|update|analyze|tv-export|profile-sweep)
     MODE=$1
     shift
     exec "$PYTHON" "$ROOT_DIR/run_screener.py" --mode "$MODE" --config "$ROOT_DIR/config/config.json" "$@"
+    ;;
+  web)
+    shift
+    exec "$PYTHON" "$ROOT_DIR/run_screener.py" --mode web "$@"
     ;;
   all)
     shift
@@ -27,7 +31,7 @@ case "$1" in
     exec "$PYTHON" "$ROOT_DIR/run_screener.py" --mode screen --config "$ROOT_DIR/config/config.json" "$@"
     ;;
   *)
-    echo "Usage: ./screener [download|parse|enrich|leadership|financials|screen|status|update|analyze|tv-export|all] [extra args]" >&2
+    echo "Usage: ./screener [download|parse|enrich|leadership|financials|screen|status|update|analyze|tv-export|profile-sweep|web|all] [extra args]" >&2
     echo "Example: ./screener screen" >&2
     exit 2
     ;;

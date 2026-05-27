@@ -15,6 +15,7 @@ import numpy as np
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 
+from src.api.kis_client import KISClient
 from src.api.sec_client import SECClient
 from src.collectors.insider_collector import enrich_companies_with_insider_data
 from src.collectors.institutional_collector import enrich_companies_with_13f_data
@@ -120,6 +121,8 @@ class MarketDataEnricher:
         self._yfinance_info_rate_limited = False
         self._yfinance_info_rate_limit_warning_logged = False
         self._bulk_yfinance_fetch = False
+        self._kis_client: Optional[KISClient] = None
+        self._kis_client_checked = False
         Path(self.market_data_dir).mkdir(parents=True, exist_ok=True)
         Path(self.price_cache_dir).mkdir(parents=True, exist_ok=True)
         Path(self.sec_metadata_dir).mkdir(parents=True, exist_ok=True)
@@ -628,9 +631,7 @@ class MarketDataEnricher:
 
         market_data_config = self.config.get("market_data", {})
         period = market_data_config.get("leadership_period", "15mo")
-        chunk_size = market_data_config.get("leadership_chunk_size", 100)
-        histories = self._download_price_history([ticker], period, chunk_size)
-        history = histories.get(ticker)
+        history = self._download_single_history(ticker, period)
         benchmark_history = self._download_single_history(market_data_config.get("leadership_benchmark", "SPY"), period)
         benchmark_close = self._history_series(benchmark_history, "Close")
         if benchmark_close.empty:
@@ -638,6 +639,10 @@ class MarketDataEnricher:
 
         if history is not None and not history.empty:
             metrics = self._calculate_single_leadership_metrics(history, benchmark_close)
+            if history.attrs.get("source"):
+                metrics["price_history_source"] = history.attrs.get("source")
+            if history.attrs.get("exchange"):
+                metrics["price_history_exchange"] = history.attrs.get("exchange")
             close = self._history_series(history, "Close")
             if not close.empty:
                 latest_close = float(close.iloc[-1])
@@ -782,9 +787,15 @@ class MarketDataEnricher:
         return histories
 
     def _download_single_history(self, ticker: str, period: str) -> Optional[pd.DataFrame]:
+        broker_history = self._download_broker_history(ticker, period)
+        if broker_history is not None and not broker_history.empty:
+            return broker_history
+
         cached = self._load_price_history_cache(ticker)
         if cached is not None:
             return cached
+        if yf is None:
+            return None
         try:
             data = yf.download(
                 tickers=ticker,
@@ -804,6 +815,42 @@ class MarketDataEnricher:
         if history is not None and not history.empty:
             self._save_price_history_cache(ticker, history)
         return history
+
+    def _download_broker_history(self, ticker: str, period: str) -> Optional[pd.DataFrame]:
+        broker_config = self.config.get("broker_api", {})
+        if not broker_config.get("enabled", False) or not broker_config.get("use_for_single_ticker", True):
+            return None
+        if str(broker_config.get("provider", "kis")).lower() != "kis":
+            return None
+
+        client = self._get_kis_client()
+        if client is None:
+            return None
+        try:
+            history = client.get_overseas_daily_history(
+                ticker,
+                period=period,
+                adjusted=bool(broker_config.get("adjusted_price", True)),
+            )
+        except Exception as exc:
+            logger.info("KIS broker history failed for %s: %s", ticker, exc)
+            return None
+
+        if history is None or history.empty:
+            return None
+        self._save_price_history_cache(ticker, history)
+        return history
+
+    def _get_kis_client(self) -> Optional[KISClient]:
+        if self._kis_client_checked:
+            return self._kis_client
+        self._kis_client_checked = True
+        try:
+            self._kis_client = KISClient.from_config(self.config)
+        except Exception as exc:
+            logger.info("KIS broker client is unavailable: %s", exc)
+            self._kis_client = None
+        return self._kis_client
 
     @staticmethod
     def _chart_response_to_history(payload: Dict[str, Any]) -> Optional[pd.DataFrame]:
